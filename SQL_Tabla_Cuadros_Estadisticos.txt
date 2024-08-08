@@ -1,0 +1,1673 @@
+WITH CTE_FEE_Sum AS (
+    SELECT 
+        n_dependencia,
+        n_anio,
+        SUM(CASE WHEN n_mes = 1 THEN C0_Tramite ELSE 0 END) AS Carga_Inicial,
+        SUM(CASE WHEN n_mes < 6 THEN I1_Admitidos ELSE 0 END) AS Ingresos_Admision,
+        SUM(CASE WHEN n_mes < 6 THEN I2_InstInf ELSE 0 END) AS Ingresos_InstInf,
+        SUM(CASE WHEN n_mes < 6 THEN I3_AnuladaTram ELSE 0 END) AS Ingresos_AnuladaTram,
+        SUM(CASE WHEN n_mes < 6 THEN I4_Improcedente ELSE 0 END) AS Ingresos_Improcedente,
+        SUM(CASE WHEN n_mes < 6 THEN I5_DeOtraDep ELSE 0 END) AS Ingresos_Redistribucion,
+        SUM(CASE WHEN n_mes < 6 THEN E8_AOtraDep ELSE 0 END) AS Egresos_Redistribucion,
+        SUM(CASE WHEN n_mes < 6 THEN E0_ResolucionExp ELSE 0 END) AS Resueltos
+    FROM Qlik_FEE
+    WHERE n_anio = 2024
+    GROUP BY n_dependencia, n_anio
+),
+CTE_Intermedio AS (
+    SELECT 
+        FEE.n_dependencia,
+        DEP.Corte,
+        DEP.Jerarquia,
+        DEP.Dependencia,
+        RD.Competencia_Laboral,
+        RD.Funcionamiento,
+        CFE.Carga_Inicial,
+        CFE.Ingresos_Admision + CFE.Ingresos_InstInf + CFE.Ingresos_AnuladaTram + CFE.Ingresos_Improcedente AS Ingresos,
+        CFE.Ingresos_Admision,
+        CFE.Ingresos_Redistribucion,
+        CFE.Egresos_Redistribucion,
+        CFE.Carga_Inicial + CFE.Ingresos_Admision + CFE.Ingresos_InstInf + CFE.Ingresos_AnuladaTram + CFE.Ingresos_Improcedente AS Carga_Procesal,
+        CFE.Resueltos,
+        CFE.Carga_Inicial + CFE.Ingresos_Admision + CFE.Ingresos_InstInf + CFE.Ingresos_AnuladaTram + CFE.Ingresos_Improcedente - CFE.Resueltos AS Carga_Final,
+        CFE.Carga_Inicial 
+        + CASE WHEN (CFE.Ingresos_Admision + CFE.Ingresos_InstInf + CFE.Ingresos_AnuladaTram + CFE.Ingresos_Improcedente) > 0 THEN 
+            (CFE.Ingresos_Admision + CFE.Ingresos_InstInf + CFE.Ingresos_AnuladaTram + CFE.Ingresos_Improcedente) / 5.0 * 11 
+        ELSE 
+            CFE.Ingresos_Admision + CFE.Ingresos_InstInf + CFE.Ingresos_AnuladaTram + CFE.Ingresos_Improcedente 
+        END 
+        + CFE.Ingresos_Redistribucion - CFE.Egresos_Redistribucion AS Carga_Procesal_Proyectada
+    FROM
+        Qlik_FEE AS FEE 
+        LEFT JOIN Qlik_Dependencia1 AS DEP ON FEE.n_dependencia = DEP.n_dependencia
+        LEFT JOIN dbo.ResumenDependencias AS RD ON FEE.n_dependencia = RD.n_dependencia
+        LEFT JOIN CTE_FEE_Sum AS CFE ON FEE.n_dependencia = CFE.n_dependencia AND FEE.n_anio = CFE.n_anio
+    WHERE 
+        DEP.Especialidad = 'Laboral' 
+        AND FEE.n_anio = 2024
+        AND FEE.n_dependencia NOT IN (7114, 7126)
+    GROUP BY 
+        FEE.n_dependencia, DEP.Corte, DEP.Jerarquia, DEP.Dependencia, RD.Competencia_Laboral, RD.Funcionamiento, 
+        CFE.Carga_Inicial, CFE.Ingresos_Admision, CFE.Ingresos_InstInf, CFE.Ingresos_AnuladaTram, CFE.Ingresos_Improcedente, 
+        CFE.Ingresos_Redistribucion, CFE.Egresos_Redistribucion, CFE.Resueltos
+),
+CTE_Final AS (
+    SELECT 
+        *,
+        Jerarquia + Competencia_Laboral + Funcionamiento AS JerarquitaTotal,
+        CASE 
+            WHEN Jerarquia + Competencia_Laboral = 'Juzgado de Paz LetradoNLPT' THEN 1500
+            WHEN Jerarquia + Competencia_Laboral = 'Juzgado de Paz LetradoNLPT2' THEN 850
+            WHEN Jerarquia + Competencia_Laboral = 'Juzgado de Paz LetradoALPT' THEN 1500
+            WHEN Jerarquia + Competencia_Laboral = 'Juzgado EspecializadoNLPT' THEN 550
+            WHEN Jerarquia + Competencia_Laboral = 'Juzgado EspecializadoPCALP' THEN 1000
+            WHEN Jerarquia + Competencia_Laboral = 'Juzgado EspecializadoPCAL NoPrev' THEN 1000
+            WHEN Jerarquia + Competencia_Laboral = 'Juzgado EspecializadoPCAL Prev' THEN 1000
+            WHEN Jerarquia + Competencia_Laboral = 'Juzgado EspecializadoALPT' THEN 510
+            WHEN Jerarquia + Competencia_Laboral = 'Juzgado EspecializadoMixto' THEN 820
+            WHEN Jerarquia + Competencia_Laboral = 'Sala SuperiorNLPT' THEN 1350
+            WHEN Jerarquia + Competencia_Laboral = 'Sala SuperiorPCALP' THEN 2000
+            WHEN Jerarquia + Competencia_Laboral = 'Sala SuperiorMixto' THEN 1800
+            WHEN Jerarquia + Competencia_Laboral = 'Sala SuperiorALPT' THEN 1600
+            ELSE NULL
+        END AS [Estandar_Resolucion],
+        CASE 
+            WHEN [Carga_Procesal_Proyectada] > (CASE 
+                WHEN Jerarquia + Competencia_Laboral = 'Juzgado de Paz LetradoNLPT' THEN 1500
+                WHEN Jerarquia + Competencia_Laboral = 'Juzgado de Paz LetradoNLPT2' THEN 850
+                WHEN Jerarquia + Competencia_Laboral = 'Juzgado de Paz LetradoALPT' THEN 1500
+                WHEN Jerarquia + Competencia_Laboral = 'Juzgado EspecializadoNLPT' THEN 550
+                WHEN Jerarquia + Competencia_Laboral = 'Juzgado EspecializadoPCALP' THEN 1000
+                WHEN Jerarquia + Competencia_Laboral = 'Juzgado EspecializadoPCAL NoPrev' THEN 1000
+                WHEN Jerarquia + Competencia_Laboral = 'Juzgado EspecializadoPCAL Prev' THEN 1000
+                WHEN Jerarquia + Competencia_Laboral = 'Juzgado EspecializadoALPT' THEN 510
+                WHEN Jerarquia + Competencia_Laboral = 'Juzgado EspecializadoMixto' THEN 820
+                WHEN Jerarquia + Competencia_Laboral = 'Sala SuperiorNLPT' THEN 1350
+                WHEN Jerarquia + Competencia_Laboral = 'Sala SuperiorPCALP' THEN 2000
+                WHEN Jerarquia + Competencia_Laboral = 'Sala SuperiorMixto' THEN 1800
+                WHEN Jerarquia + Competencia_Laboral = 'Sala SuperiorALPT' THEN 1600
+                ELSE NULL
+            END) * 100 / 77 THEN (CASE 
+                WHEN Jerarquia + Competencia_Laboral = 'Juzgado de Paz LetradoNLPT' THEN 1500
+                WHEN Jerarquia + Competencia_Laboral = 'Juzgado de Paz LetradoNLPT2' THEN 850
+                WHEN Jerarquia + Competencia_Laboral = 'Juzgado de Paz LetradoALPT' THEN 1500
+                WHEN Jerarquia + Competencia_Laboral = 'Juzgado EspecializadoNLPT' THEN 550
+                WHEN Jerarquia + Competencia_Laboral = 'Juzgado EspecializadoPCALP' THEN 1000
+                WHEN Jerarquia + Competencia_Laboral = 'Juzgado EspecializadoPCAL NoPrev' THEN 1000
+                WHEN Jerarquia + Competencia_Laboral = 'Juzgado EspecializadoPCAL Prev' THEN 1000
+                WHEN Jerarquia + Competencia_Laboral = 'Juzgado EspecializadoALPT' THEN 510
+                WHEN Jerarquia + Competencia_Laboral = 'Juzgado EspecializadoMixto' THEN 820
+                WHEN Jerarquia + Competencia_Laboral = 'Sala SuperiorNLPT' THEN 1350
+                WHEN Jerarquia + Competencia_Laboral = 'Sala SuperiorPCALP' THEN 2000
+                WHEN Jerarquia + Competencia_Laboral = 'Sala SuperiorMixto' THEN 1800
+                WHEN Jerarquia + Competencia_Laboral = 'Sala SuperiorALPT' THEN 1600
+                ELSE NULL
+            END)
+            ELSE [Carga_Procesal_Proyectada] * 77 / 100
+        END AS [Meta_Anual_Proyectada]
+    FROM CTE_Intermedio
+),
+CTE_AvanceMeta AS (
+    SELECT 
+        *,
+        CASE 
+            WHEN [Meta_Anual_Proyectada] <> 0 THEN ROUND(([Resueltos] / [Meta_Anual_Proyectada]) * 100.0, 0)
+            ELSE 0 
+        END AS [Avance_Meta],
+        [Ingresos] + [Ingresos_Redistribucion] - [Egresos_Redistribucion] AS [Ingresos_a_Tramite]
+    FROM CTE_Final
+),
+CTE_Ranking AS (
+    SELECT 
+        *,
+        (SELECT COUNT(*)
+         FROM CTE_AvanceMeta AS cf2
+         WHERE cf2.[Avance_Meta] > cf1.[Avance_Meta]) AS [Ranking_Total],
+        (SELECT COUNT(*)
+         FROM CTE_AvanceMeta AS cf2
+         WHERE cf2.[JerarquitaTotal] = cf1.[JerarquitaTotal]) AS [Recuento_Jerarquia],
+        (SELECT COUNT(*)
+         FROM CTE_AvanceMeta AS cf2
+         WHERE cf2.[Avance_Meta] > cf1.[Avance_Meta]
+           AND cf2.[JerarquitaTotal] = cf1.[JerarquitaTotal]) AS [Ranking_General],
+        CASE 
+            WHEN Jerarquia + Competencia_Laboral = 'Juzgado de Paz LetradoNLPT' THEN
+                CASE 
+                    WHEN [Carga_Procesal_Proyectada] > 2550 THEN 'Sobrecarga'
+                    WHEN [Carga_Procesal_Proyectada] > 1950 THEN 'Carga Estandar'
+                    ELSE 'Subcarga'
+                END
+            WHEN Jerarquia + Competencia_Laboral = 'Juzgado de Paz LetradoNLPT2' THEN
+                CASE 
+                    WHEN [Carga_Procesal_Proyectada] > 1445 THEN 'Sobrecarga'
+                    WHEN [Carga_Procesal_Proyectada] > 1105 THEN 'Carga Estandar'
+                    ELSE 'Subcarga'
+                END
+            WHEN Jerarquia + Competencia_Laboral = 'Juzgado de Paz LetradoALPT' THEN
+                CASE 
+                    WHEN [Carga_Procesal_Proyectada] > 2550 THEN 'Sobrecarga'
+                    WHEN [Carga_Procesal_Proyectada] > 1950 THEN 'Carga Estandar'
+                    ELSE 'Subcarga'
+                END
+            WHEN Jerarquia + Competencia_Laboral = 'Juzgado EspecializadoNLPT' THEN
+                CASE 
+                    WHEN [Carga_Procesal_Proyectada] > 935 THEN 'Sobrecarga'
+                    WHEN [Carga_Procesal_Proyectada] > 715 THEN 'Carga Estandar'
+                    ELSE 'Subcarga'
+                END
+            WHEN Jerarquia + Competencia_Laboral = 'Juzgado EspecializadoPCALP' THEN
+                CASE 
+                    WHEN [Carga_Procesal_Proyectada] > 1700 THEN 'Sobrecarga'
+                    WHEN [Carga_Procesal_Proyectada] > 1300 THEN 'Carga Estandar'
+                    ELSE 'Subcarga'
+                END
+            WHEN Jerarquia + Competencia_Laboral = 'Juzgado EspecializadoPCAL NoPrev' THEN
+                CASE 
+                    WHEN [Carga_Procesal_Proyectada] > 1700 THEN 'Sobrecarga'
+                    WHEN [Carga_Procesal_Proyectada] > 1300 THEN 'Carga Estandar'
+                    ELSE 'Subcarga'
+                END
+            WHEN Jerarquia + Competencia_Laboral = 'Juzgado EspecializadoPCAL Prev' THEN
+                CASE 
+                    WHEN [Carga_Procesal_Proyectada] > 1700 THEN 'Sobrecarga'
+                    WHEN [Carga_Procesal_Proyectada] > 1300 THEN 'Carga Estandar'
+                    ELSE 'Subcarga'
+                END
+            WHEN Jerarquia + Competencia_Laboral = 'Juzgado EspecializadoALPT' THEN
+                CASE 
+                    WHEN [Carga_Procesal_Proyectada] > 867 THEN 'Sobrecarga'
+                    WHEN [Carga_Procesal_Proyectada] > 663 THEN 'Carga Estandar'
+                    ELSE 'Subcarga'
+                END
+            WHEN Jerarquia + Competencia_Laboral = 'Juzgado EspecializadoMixto' THEN
+                CASE 
+                    WHEN [Carga_Procesal_Proyectada] > 1394 THEN 'Sobrecarga'
+                    WHEN [Carga_Procesal_Proyectada] > 1066 THEN 'Carga Estandar'
+                    ELSE 'Subcarga'
+                END
+            WHEN Jerarquia + Competencia_Laboral = 'Sala SuperiorNLPT' THEN
+                CASE 
+                    WHEN [Carga_Procesal_Proyectada] > 2295 THEN 'Sobrecarga'
+                    WHEN [Carga_Procesal_Proyectada] > 1755 THEN 'Carga Estandar'
+                    ELSE 'Subcarga'
+                END
+            WHEN Jerarquia + Competencia_Laboral = 'Sala SuperiorPCALP' THEN
+                CASE 
+                    WHEN [Carga_Procesal_Proyectada] > 3400 THEN 'Sobrecarga'
+                    WHEN [Carga_Procesal_Proyectada] > 2600 THEN 'Carga Estandar'
+                    ELSE 'Subcarga'
+                END
+            WHEN Jerarquia + Competencia_Laboral = 'Sala SuperiorMixto' THEN
+                CASE 
+                    WHEN [Carga_Procesal_Proyectada] > 3060 THEN 'Sobrecarga'
+                    WHEN [Carga_Procesal_Proyectada] > 2340 THEN 'Carga Estandar'
+                    ELSE 'Subcarga'
+                END
+            WHEN Jerarquia + Competencia_Laboral = 'Sala SuperiorALPT' THEN
+                CASE 
+                    WHEN [Carga_Procesal_Proyectada] > 2720 THEN 'Sobrecarga'
+                    WHEN [Carga_Procesal_Proyectada] > 2080 THEN 'Carga Estandar'
+                    ELSE 'Subcarga'
+                END
+            ELSE 'Sin datos'
+        END AS [Estado_Carga],
+        CASE 
+            WHEN [JerarquitaTotal] = 'Juzgado de Paz LetradoNLPTFunciona' THEN 80
+            WHEN [JerarquitaTotal] = 'Juzgado de Paz LetradoNLPT2Funciona' THEN 3
+            WHEN [JerarquitaTotal] = 'Juzgado de Paz LetradoALPTFunciona' THEN 0
+            WHEN [JerarquitaTotal] = 'Juzgado EspecializadoNLPTFunciona' THEN 105
+            WHEN [JerarquitaTotal] = 'Juzgado EspecializadoPCALPFunciona' THEN 50
+            WHEN [JerarquitaTotal] = 'Juzgado EspecializadoPCAL NoPrevFunciona' THEN 14
+            WHEN [JerarquitaTotal] = 'Juzgado EspecializadoPCAL PrevFunciona' THEN 6
+            WHEN [JerarquitaTotal] = 'Juzgado EspecializadoALPTFunciona' THEN 1
+            WHEN [JerarquitaTotal] = 'Juzgado EspecializadoMixtoFunciona' THEN 26
+            WHEN [JerarquitaTotal] = 'Sala SuperiorNLPTFunciona' THEN 21
+            WHEN [JerarquitaTotal] = 'Sala SuperiorPCALPFunciona' THEN 15
+            WHEN [JerarquitaTotal] = 'Sala SuperiorMixtoFunciona' THEN 12
+            WHEN [JerarquitaTotal] = 'Sala SuperiorALPTFunciona' THEN 0
+            ELSE NULL
+        END AS [Pre_Ranking],
+        CASE
+            WHEN [Avance_Meta] > 36.0 THEN 'Muy Bueno'
+            WHEN [Avance_Meta] > 27.0 THEN 'Bueno'
+            WHEN [Avance_Meta] > 18.0 THEN 'Bajo'
+            ELSE 'Muy bajo'
+        END AS [Resultado_Avance]
+    FROM CTE_AvanceMeta AS cf1
+),
+CTE_Adicional AS (
+    SELECT 
+        FEE.n_dependencia,
+        SUM(FEE.C1_Calificacion) AS [Calificación],
+        SUM(FEE.C0_Ejecucion) AS [Ejecución],
+        SUM(FEE.C2_Impugnacion) AS [Impugnación],
+        SUM(FEE.C3_Transito) AS [Tránsito]
+    FROM
+        Qlik_FEE AS FEE 
+        LEFT JOIN Qlik_Dependencia1 AS DEP ON FEE.n_dependencia = DEP.n_dependencia
+    WHERE 
+        DEP.Especialidad = 'Laboral' 
+        AND FEE.n_anio = 2024
+        AND FEE.n_mes = 5
+    GROUP BY 
+        FEE.n_dependencia
+),
+CTE_ResultadosAnuales AS (
+    SELECT 
+        d.n_dependencia,
+        d.Corte,
+        d.Especialidad,
+        d.Jerarquia,
+        d.Dependencia,
+        d.Provincia,
+        f.Proceso,
+        f.Sub_proceso,
+        CAST(CAST(ROUND(SUM(CASE WHEN f.n_anio = 2020 THEN (f.total_E3_ConcilTotal + 0.00001) / NULLIF((f.total_E3_ConcilTotal + f.total_E1_Sentencia), 0) ELSE 0 END) * 100, 0) AS INT) AS VARCHAR) + '%' AS n_anio_2020_ratio,
+        CAST(CAST(ROUND(SUM(CASE WHEN f.n_anio = 2021 THEN (f.total_E3_ConcilTotal + 0.00001) / NULLIF((f.total_E3_ConcilTotal + f.total_E1_Sentencia), 0) ELSE 0 END) * 100, 0) AS INT) AS VARCHAR) + '%' AS n_anio_2021_ratio,
+        CAST(CAST(ROUND(SUM(CASE WHEN f.n_anio = 2022 THEN (f.total_E3_ConcilTotal + 0.00001) / NULLIF((f.total_E3_ConcilTotal + f.total_E1_Sentencia), 0) ELSE 0 END) * 100, 0) AS INT) AS VARCHAR) + '%' AS n_anio_2022_ratio,
+        CAST(CAST(ROUND(SUM(CASE WHEN f.n_anio = 2023 THEN (f.total_E3_ConcilTotal + 0.00001) / NULLIF((f.total_E3_ConcilTotal + f.total_E1_Sentencia), 0) ELSE 0 END) * 100, 0) AS INT) AS VARCHAR) + '%' AS n_anio_2023_ratio,
+        CAST(CAST(ROUND(SUM(CASE WHEN f.n_anio = 2024 THEN (f.total_E3_ConcilTotal + 0.00001) / NULLIF((f.total_E3_ConcilTotal + f.total_E1_Sentencia), 0) ELSE 0 END) * 100, 0) AS INT) AS VARCHAR) + '%' AS n_anio_2024_ratio,
+        SUM(CASE WHEN f.n_anio = 2020 THEN f.total_E3_ConcilTotal ELSE 0 END) AS n_anio_2020_concil,
+        SUM(CASE WHEN f.n_anio = 2021 THEN f.total_E3_ConcilTotal ELSE 0 END) AS n_anio_2021_concil,
+        SUM(CASE WHEN f.n_anio = 2022 THEN f.total_E3_ConcilTotal ELSE 0 END) AS n_anio_2022_concil,
+        SUM(CASE WHEN f.n_anio = 2023 THEN f.total_E3_ConcilTotal ELSE 0 END) AS n_anio_2023_concil,
+        SUM(CASE WHEN f.n_anio = 2024 THEN f.total_E3_ConcilTotal ELSE 0 END) AS n_anio_2024_concil,
+        SUM(CASE WHEN f.n_anio = 2020 THEN f.total_E1_Sentencia ELSE 0 END) AS n_anio_2020_sentencia,
+        SUM(CASE WHEN f.n_anio = 2021 THEN f.total_E1_Sentencia ELSE 0 END) AS n_anio_2021_sentencia,
+        SUM(CASE WHEN f.n_anio = 2022 THEN f.total_E1_Sentencia ELSE 0 END) AS n_anio_2022_sentencia,
+        SUM(CASE WHEN f.n_anio = 2023 THEN f.total_E1_Sentencia ELSE 0 END) AS n_anio_2023_sentencia,
+        SUM(CASE WHEN f.n_anio = 2024 THEN f.total_E1_Sentencia ELSE 0 END) AS n_anio_2024_sentencia
+    FROM 
+        dbo.Qlik_Dependencia1 d
+    JOIN 
+        (SELECT 
+            n_dependencia,
+            Proceso,
+            Sub_proceso,
+            n_anio,
+            SUM(E3_ConcilTotal) AS total_E3_ConcilTotal,
+            SUM(E1_Sentencia) AS total_E1_Sentencia
+        FROM 
+            dbo.Qlik_FEE
+        GROUP BY 
+            n_dependencia,
+            Proceso,
+            Sub_proceso,
+            n_anio) f 
+    ON d.n_dependencia = f.n_dependencia
+    WHERE
+        d.Especialidad = 'Laboral' AND
+        f.Sub_proceso = 'Abreviado' AND
+        f.Proceso = 'NLPT'
+    GROUP BY 
+        d.n_dependencia,
+        d.Corte,
+        d.Especialidad,
+        d.Jerarquia,
+        d.Dependencia, 
+        d.Provincia,
+        f.Proceso,
+        f.Sub_proceso
+),
+Juzgamiento AS (
+    SELECT 
+        d.Corte,
+        d.Especialidad,
+        d.Jerarquia,
+        d.Dependencia,
+        SUM(CASE WHEN i.n_anio = 2020 AND i.n_ind2 = 4 AND i.Sub_proceso = 'Ordinario' AND i.Proceso = 'NLPT' THEN i.cantidad1 ELSE 0 END) + 0.0001 AS n_anio_2020_Juzgamiento,
+        SUM(CASE WHEN i.n_anio = 2021 AND i.n_ind2 = 4 AND i.Sub_proceso = 'Ordinario' AND i.Proceso = 'NLPT' THEN i.cantidad1 ELSE 0 END) + 0.0001 AS n_anio_2021_Juzgamiento,
+        SUM(CASE WHEN i.n_anio = 2022 AND i.n_ind2 = 4 AND i.Sub_proceso = 'Ordinario' AND i.Proceso = 'NLPT' THEN i.cantidad1 ELSE 0 END) + 0.0001 AS n_anio_2022_Juzgamiento,
+        SUM(CASE WHEN i.n_anio = 2023 AND i.n_ind2 = 4 AND i.Sub_proceso = 'Ordinario' AND i.Proceso = 'NLPT' THEN i.cantidad1 ELSE 0 END) + 0.0001 AS n_anio_2023_Juzgamiento,
+        SUM(CASE WHEN i.n_anio = 2024 AND i.n_ind2 = 4 AND i.Sub_proceso = 'Ordinario' AND i.Proceso = 'NLPT' THEN i.cantidad1 ELSE 0 END) + 0.0001 AS n_anio_2024_Juzgamiento
+    FROM 
+        dbo.Qlik_Dependencia1 d
+    INNER JOIN 
+        dbo.Qlik_indicadores2 i ON d.n_dependencia = i.n_dependencia
+    WHERE 
+        i.Proceso = 'NLPT' AND 
+        i.Sub_proceso = 'Ordinario' AND 
+        d.Especialidad = 'Laboral' AND 
+        d.Jerarquia = 'Juzgado Especializado'
+    GROUP BY 
+        d.Corte,
+        d.Especialidad,
+        d.Jerarquia,
+        d.Dependencia
+),
+Sentencia AS (
+    SELECT
+        D.Corte,
+        D.Especialidad,
+        D.Jerarquia,
+        D.Dependencia,
+        SUM(CASE WHEN F.n_anio = 2020 THEN F.E1_Sentencia ELSE 0 END) AS n_anio_2020_1Sentencia,
+        SUM(CASE WHEN F.n_anio = 2021 THEN F.E1_Sentencia ELSE 0 END) AS n_anio_2021_1Sentencia,
+        SUM(CASE WHEN F.n_anio = 2022 THEN F.E1_Sentencia ELSE 0 END) AS n_anio_2022_1Sentencia,
+        SUM(CASE WHEN F.n_anio = 2023 THEN F.E1_Sentencia ELSE 0 END) AS n_anio_2023_1Sentencia,
+        SUM(CASE WHEN F.n_anio = 2024 THEN F.E1_Sentencia ELSE 0 END) AS n_anio_2024_1Sentencia
+    FROM
+        dbo.Qlik_Dependencia1 D
+    LEFT JOIN
+        dbo.Qlik_FEE F ON D.n_dependencia = F.n_dependencia
+    WHERE
+        F.Proceso = 'NLPT'
+        AND F.Sub_proceso = 'Ordinario'
+        AND D.Especialidad = 'Laboral'
+        AND D.Jerarquia = 'Juzgado Especializado'
+    GROUP BY
+        D.Corte,
+        D.Especialidad,
+        D.Jerarquia,
+        D.Dependencia
+),
+JuzgamientoFinal AS (
+    SELECT
+        J.Corte,
+        J.Dependencia,
+        CAST(CAST(ROUND((J.n_anio_2020_Juzgamiento / NULLIF(S.n_anio_2020_1Sentencia, 0)) * 100, 0) AS INT) AS VARCHAR) + '%' AS Ratio_2020,
+        CAST(CAST(ROUND((J.n_anio_2021_Juzgamiento / NULLIF(S.n_anio_2021_1Sentencia, 0)) * 100, 0) AS INT) AS VARCHAR) + '%' AS Ratio_2021,
+        CAST(CAST(ROUND((J.n_anio_2022_Juzgamiento / NULLIF(S.n_anio_2022_1Sentencia, 0)) * 100, 0) AS INT) AS VARCHAR) + '%' AS Ratio_2022,
+        CAST(CAST(ROUND((J.n_anio_2023_Juzgamiento / NULLIF(S.n_anio_2023_1Sentencia, 0)) * 100, 0) AS INT) AS VARCHAR) + '%' AS Ratio_2023,
+        CAST(CAST(ROUND((J.n_anio_2024_Juzgamiento / NULLIF(S.n_anio_2024_1Sentencia, 0)) * 100, 0) AS INT) AS VARCHAR) + '%' AS Ratio_2024
+    FROM
+        Juzgamiento J
+    INNER JOIN
+        Sentencia S ON J.Corte = S.Corte
+                    AND J.Dependencia = S.Dependencia
+),
+CTE_Audiencias AS (
+    SELECT 
+        d.n_dependencia,
+        CAST(CAST(ROUND((1 - SUM(CASE WHEN i.n_anio = 2020 AND i.n_ind2 = 2 THEN i.cantidad1 END) / NULLIF(SUM(CASE WHEN i.n_anio = 2020 AND i.n_ind2 = 2 THEN i.cantidad2 END), 0)) * 100, 0) AS INT) AS VARCHAR) + '%' AS n_anio_2020_Audiencias,
+        CAST(CAST(ROUND((1 - SUM(CASE WHEN i.n_anio = 2021 AND i.n_ind2 = 2 THEN i.cantidad1 END) / NULLIF(SUM(CASE WHEN i.n_anio = 2021 AND i.n_ind2 = 2 THEN i.cantidad2 END), 0)) * 100, 0) AS INT) AS VARCHAR) + '%' AS n_anio_2021_Audiencias,
+        CAST(CAST(ROUND((1 - SUM(CASE WHEN i.n_anio = 2022 AND i.n_ind2 = 2 THEN i.cantidad1 END) / NULLIF(SUM(CASE WHEN i.n_anio = 2022 AND i.n_ind2 = 2 THEN i.cantidad2 END), 0)) * 100, 0) AS INT) AS VARCHAR) + '%' AS n_anio_2022_Audiencias,
+        CAST(CAST(ROUND((1 - SUM(CASE WHEN i.n_anio = 2023 AND i.n_ind2 = 2 THEN i.cantidad1 END) / NULLIF(SUM(CASE WHEN i.n_anio = 2023 AND i.n_ind2 = 2 THEN i.cantidad2 END), 0)) * 100, 0) AS INT) AS VARCHAR) + '%' AS n_anio_2023_Audiencias,
+        CAST(CAST(ROUND((1 - SUM(CASE WHEN i.n_anio = 2024 AND i.n_ind2 = 2 THEN i.cantidad1 END) / NULLIF(SUM(CASE WHEN i.n_anio = 2024 AND i.n_ind2 = 2 THEN i.cantidad2 END), 0)) * 100, 0) AS INT) AS VARCHAR) + '%' AS n_anio_2024_Audiencias
+    FROM 
+        dbo.Qlik_Dependencia1 d
+    JOIN 
+        dbo.Qlik_FEE f ON d.n_dependencia = f.n_dependencia
+    JOIN 
+        dbo.Qlik_indicadores2 i ON d.n_dependencia = i.n_dependencia      
+    WHERE
+        d.Especialidad = 'Laboral' AND
+        f.Sub_proceso = 'Abreviado' AND
+        i.Sub_proceso = 'Abreviado' AND
+        f.Proceso = 'NLPT'
+    GROUP BY 
+        d.n_dependencia
+),
+indicadores_filtrados AS (
+    SELECT
+        i.n_dependencia,
+        d1.Corte,
+        i.n_anio,
+        i.n_ind,
+        i.sub_proceso,
+        d1.Especialidad,
+        d1.Jerarquia,
+        i.tiempo2
+    FROM
+        dbo.Qlik_indicadores i
+    JOIN
+        dbo.Qlik_Dependencia1 d1 ON i.n_dependencia = d1.n_dependencia
+    WHERE
+        i.n_anio BETWEEN 2020 AND 2024 AND
+        i.n_ind IN (101, 102) AND
+        i.sub_proceso = 'Abreviado' AND
+        d1.Especialidad = 'Laboral' AND
+        d1.Jerarquia = 'Juzgado de Paz Letrado'
+),
+medianas AS (
+    SELECT
+        Corte,
+        n_anio,
+        n_ind,
+        PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY tiempo2) OVER (PARTITION BY Corte, n_anio, n_ind) AS mediana
+    FROM
+        indicadores_filtrados
+),
+medianas_aggregated AS (
+    SELECT DISTINCT
+        Corte,
+        n_anio,
+        MAX(CASE WHEN n_ind = 101 THEN mediana END) OVER (PARTITION BY Corte, n_anio) AS mediana_101,
+        MAX(CASE WHEN n_ind = 102 THEN mediana END) OVER (PARTITION BY Corte, n_anio) AS mediana_102
+    FROM
+        medianas
+),
+CTE_Medianas AS (
+    SELECT
+        d1.Corte,
+        d1.Especialidad,
+        d1.Jerarquia,
+        f.Proceso,
+        f.Sub_proceso,
+        ROUND(MAX(CASE WHEN m.n_anio = 2020 THEN m.mediana_101 END), 0) AS n_anio_2020_calificacion,
+        ROUND(MAX(CASE WHEN m.n_anio = 2021 THEN m.mediana_101 END), 0) AS n_anio_2021_calificacion,
+        ROUND(MAX(CASE WHEN m.n_anio = 2022 THEN m.mediana_101 END), 0) AS n_anio_2022_calificacion,
+        ROUND(MAX(CASE WHEN m.n_anio = 2023 THEN m.mediana_101 END), 0) AS n_anio_2023_calificacion,
+        ROUND(MAX(CASE WHEN m.n_anio = 2024 THEN m.mediana_101 END), 0) AS n_anio_2024_calificacion,
+        ROUND(MAX(CASE WHEN m.n_anio = 2020 THEN m.mediana_102 END), 0) AS n_anio_2020_1instancia,
+        ROUND(MAX(CASE WHEN m.n_anio = 2021 THEN m.mediana_102 END), 0) AS n_anio_2021_1instancia,
+        ROUND(MAX(CASE WHEN m.n_anio = 2022 THEN m.mediana_102 END), 0) AS n_anio_2022_1instancia,
+        ROUND(MAX(CASE WHEN m.n_anio = 2023 THEN m.mediana_102 END), 0) AS n_anio_2023_1instancia,
+        ROUND(MAX(CASE WHEN m.n_anio = 2024 THEN m.mediana_102 END), 0) AS n_anio_2024_1instancia
+    FROM
+        dbo.Qlik_Dependencia1 d1
+    LEFT JOIN
+        dbo.Qlik_FEE f ON d1.n_dependencia = f.n_dependencia
+    LEFT JOIN
+        medianas_aggregated m ON d1.Corte = m.Corte AND f.n_anio = m.n_anio
+    WHERE
+        d1.Especialidad = 'Laboral' AND
+        f.Proceso = 'NLPT' AND
+        f.Sub_proceso = 'Abreviado'
+    GROUP BY
+        d1.Corte,
+        d1.Especialidad,
+        d1.Jerarquia,
+        f.Proceso,
+        f.Sub_proceso
+),
+Sumas AS (
+    SELECT 
+        d.Corte,
+        d.Especialidad,
+        d.Jerarquia,
+        f.Proceso,
+        f.Sub_proceso,
+        SUM(CASE WHEN f.n_anio = 2020 THEN f.total_E3_ConcilTotal ELSE 0 END) AS n_anio_2020_concil,
+        SUM(CASE WHEN f.n_anio = 2021 THEN f.total_E3_ConcilTotal ELSE 0 END) AS n_anio_2021_concil,
+        SUM(CASE WHEN f.n_anio = 2022 THEN f.total_E3_ConcilTotal ELSE 0 END) AS n_anio_2022_concil,
+        SUM(CASE WHEN f.n_anio = 2023 THEN f.total_E3_ConcilTotal ELSE 0 END) AS n_anio_2023_concil,
+        SUM(CASE WHEN f.n_anio = 2024 THEN f.total_E3_ConcilTotal ELSE 0 END) AS n_anio_2024_concil,
+        SUM(CASE WHEN f.n_anio = 2020 THEN f.total_E1_Sentencia ELSE 0 END) AS n_anio_2020_sentencia,
+        SUM(CASE WHEN f.n_anio = 2021 THEN f.total_E1_Sentencia ELSE 0 END) AS n_anio_2021_sentencia,
+        SUM(CASE WHEN f.n_anio = 2022 THEN f.total_E1_Sentencia ELSE 0 END) AS n_anio_2022_sentencia,
+        SUM(CASE WHEN f.n_anio = 2023 THEN f.total_E1_Sentencia ELSE 0 END) AS n_anio_2023_sentencia,
+        SUM(CASE WHEN f.n_anio = 2024 THEN f.total_E1_Sentencia ELSE 0 END) AS n_anio_2024_sentencia
+    FROM 
+        dbo.Qlik_Dependencia1 d
+    JOIN 
+        (SELECT 
+            n_dependencia,
+            Proceso,
+            Sub_proceso,
+            n_anio,
+            SUM(E3_ConcilTotal) AS total_E3_ConcilTotal,
+            SUM(E1_Sentencia) AS total_E1_Sentencia
+        FROM 
+            dbo.Qlik_FEE
+        GROUP BY 
+            n_dependencia,
+            Proceso,
+            Sub_proceso,
+            n_anio) f 
+    ON d.n_dependencia = f.n_dependencia
+    WHERE
+        d.Especialidad = 'Laboral' AND
+        f.Sub_proceso = 'Abreviado' AND
+        f.Proceso = 'NLPT'
+    GROUP BY 
+        d.Corte,
+        d.Especialidad,
+        d.Jerarquia,
+        f.Proceso,
+        f.Sub_proceso
+),
+CTE_Audiencias_Reprogramadas_Totales AS (
+    SELECT 
+        d.Corte,
+        d.Especialidad,
+        d.Jerarquia,
+        f.Proceso,
+        f.Sub_proceso,
+        CAST(CAST(ROUND((1 - SUM(CASE WHEN i.n_anio = 2020 AND i.n_ind2 = 2 THEN i.cantidad1 END) / NULLIF(SUM(CASE WHEN i.n_anio = 2020 AND i.n_ind2 = 2 THEN i.cantidad2 END), 0)) * 100, 0) AS INT) AS VARCHAR) + '%' AS n_anio_2020_Audiencias,
+        CAST(CAST(ROUND((1 - SUM(CASE WHEN i.n_anio = 2021 AND i.n_ind2 = 2 THEN i.cantidad1 END) / NULLIF(SUM(CASE WHEN i.n_anio = 2021 AND i.n_ind2 = 2 THEN i.cantidad2 END), 0)) * 100, 0) AS INT) AS VARCHAR) + '%' AS n_anio_2021_Audiencias,
+        CAST(CAST(ROUND((1 - SUM(CASE WHEN i.n_anio = 2022 AND i.n_ind2 = 2 THEN i.cantidad1 END) / NULLIF(SUM(CASE WHEN i.n_anio = 2022 AND i.n_ind2 = 2 THEN i.cantidad2 END), 0)) * 100, 0) AS INT) AS VARCHAR) + '%' AS n_anio_2022_Audiencias,
+        CAST(CAST(ROUND((1 - SUM(CASE WHEN i.n_anio = 2023 AND i.n_ind2 = 2 THEN i.cantidad1 END) / NULLIF(SUM(CASE WHEN i.n_anio = 2023 AND i.n_ind2 = 2 THEN i.cantidad2 END), 0)) * 100, 0) AS INT) AS VARCHAR) + '%' AS n_anio_2023_Audiencias,
+        CAST(CAST(ROUND((1 - SUM(CASE WHEN i.n_anio = 2024 AND i.n_ind2 = 2 THEN i.cantidad1 END) / NULLIF(SUM(CASE WHEN i.n_anio = 2024 AND i.n_ind2 = 2 THEN i.cantidad2 END), 0)) * 100, 0) AS INT) AS VARCHAR) + '%' AS n_anio_2024_Audiencias
+    FROM 
+        dbo.Qlik_Dependencia1 d
+    JOIN 
+        dbo.Qlik_FEE f ON d.n_dependencia = f.n_dependencia
+    JOIN 
+        dbo.Qlik_indicadores2 i ON d.n_dependencia = i.n_dependencia
+    WHERE
+        d.Especialidad = 'Laboral' AND
+        f.Proceso = 'NLPT' AND
+        f.Sub_proceso = 'Abreviado' AND
+        i.Sub_proceso = 'Abreviado' 
+    GROUP BY 
+        d.Corte,
+        d.Especialidad,
+        d.Jerarquia,
+        f.Proceso,
+        f.Sub_proceso
+),
+indicadores_filtradosT AS (
+    SELECT
+        n_dependencia,
+        n_anio,
+        n_ind,
+        sub_proceso,
+        tiempo2
+    FROM
+        dbo.Qlik_indicadores
+    WHERE
+        n_anio BETWEEN 2020 AND 2024 AND
+        n_ind IN (101, 102) AND
+        sub_proceso = 'Abreviado'
+),
+medianasT AS (
+    SELECT
+        n_dependencia,
+        n_anio,
+        n_ind,
+        PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY tiempo2) OVER (PARTITION BY n_dependencia, n_anio, n_ind) AS mediana
+    FROM
+        indicadores_filtradosT
+),
+medianas_aggregatedT AS (
+    SELECT DISTINCT
+        n_dependencia,
+        n_anio,
+        MAX(CASE WHEN n_ind = 101 THEN mediana END) OVER (PARTITION BY n_dependencia, n_anio) AS mediana_101,
+        MAX(CASE WHEN n_ind = 102 THEN mediana END) OVER (PARTITION BY n_dependencia, n_anio) AS mediana_102
+    FROM
+        medianasT
+),
+CTE_MedianasT AS (
+    SELECT
+		d1.n_dependencia,
+        d1.Corte,
+		d1.Dependencia,
+        d1.Jerarquia,
+        ROUND(MAX(CASE WHEN m.n_anio = 2020 THEN m.mediana_101 END), 0) AS n_anio_2020_calificacionT,
+        ROUND(MAX(CASE WHEN m.n_anio = 2021 THEN m.mediana_101 END), 0) AS n_anio_2021_calificacionT,
+        ROUND(MAX(CASE WHEN m.n_anio = 2022 THEN m.mediana_101 END), 0) AS n_anio_2022_calificacionT,
+        ROUND(MAX(CASE WHEN m.n_anio = 2023 THEN m.mediana_101 END), 0) AS n_anio_2023_calificacionT,
+        ROUND(MAX(CASE WHEN m.n_anio = 2024 THEN m.mediana_101 END), 0) AS n_anio_2024_calificacionT,
+        ROUND(MAX(CASE WHEN m.n_anio = 2020 THEN m.mediana_102 END), 0) AS n_anio_2020_1instanciaT,
+        ROUND(MAX(CASE WHEN m.n_anio = 2021 THEN m.mediana_102 END), 0) AS n_anio_2021_1instanciaT,
+        ROUND(MAX(CASE WHEN m.n_anio = 2022 THEN m.mediana_102 END), 0) AS n_anio_2022_1instanciaT,
+        ROUND(MAX(CASE WHEN m.n_anio = 2023 THEN m.mediana_102 END), 0) AS n_anio_2023_1instanciaT,
+        ROUND(MAX(CASE WHEN m.n_anio = 2024 THEN m.mediana_102 END), 0) AS n_anio_2024_1instanciaT
+    FROM
+        dbo.Qlik_Dependencia1 d1
+    LEFT JOIN
+        dbo.Qlik_FEE f ON d1.n_dependencia = f.n_dependencia
+    LEFT JOIN
+        medianas_aggregatedT m ON d1.n_dependencia = m.n_dependencia AND f.n_anio = m.n_anio
+    WHERE
+        d1.Especialidad = 'Laboral' AND
+        f.Proceso = 'NLPT' AND
+        f.Sub_proceso = 'Abreviado'
+    GROUP BY
+		d1.n_dependencia,
+        d1.Corte, 
+		d1.Dependencia,
+        d1.Jerarquia,
+        f.Proceso,
+        f.Sub_proceso
+),
+CTE_Conciliacion_Abreviado_Ordinario AS (
+    SELECT 
+        d.Corte,
+        d.Especialidad,
+        d.Jerarquia,
+        d.Dependencia,
+        f.Proceso,
+        'Abreviado y Ordinario' AS Sub_proceso,
+        CAST(CAST(ROUND(MAX(CASE WHEN f.n_anio = 2020 THEN (f.total_E3_ConcilTotal + 0.00001) / NULLIF((f.total_E3_ConcilTotal + f.total_E1_Sentencia), 0) ELSE 0 END) * 100, 0) AS INT) AS VARCHAR) + '%' AS n_anio_2020_ratio,
+        CAST(CAST(ROUND(MAX(CASE WHEN f.n_anio = 2021 THEN (f.total_E3_ConcilTotal + 0.00001) / NULLIF((f.total_E3_ConcilTotal + f.total_E1_Sentencia), 0) ELSE 0 END) * 100, 0) AS INT) AS VARCHAR) + '%' AS n_anio_2021_ratio,
+        CAST(CAST(ROUND(MAX(CASE WHEN f.n_anio = 2022 THEN (f.total_E3_ConcilTotal + 0.00001) / NULLIF((f.total_E3_ConcilTotal + f.total_E1_Sentencia), 0) ELSE 0 END) * 100, 0) AS INT) AS VARCHAR) + '%' AS n_anio_2022_ratio,
+        CAST(CAST(ROUND(MAX(CASE WHEN f.n_anio = 2023 THEN (f.total_E3_ConcilTotal + 0.00001) / NULLIF((f.total_E3_ConcilTotal + f.total_E1_Sentencia), 0) ELSE 0 END) * 100, 0) AS INT) AS VARCHAR) + '%' AS n_anio_2023_ratio,
+        CAST(CAST(ROUND(MAX(CASE WHEN f.n_anio = 2024 THEN (f.total_E3_ConcilTotal + 0.00001) / NULLIF((f.total_E3_ConcilTotal + f.total_E1_Sentencia), 0) ELSE 0 END) * 100, 0) AS INT) AS VARCHAR) + '%' AS n_anio_2024_ratio,
+        MAX(CASE WHEN f.n_anio = 2020 THEN f.total_E3_ConcilTotal ELSE 0 END) AS n_anio_2020_concil,
+        MAX(CASE WHEN f.n_anio = 2021 THEN f.total_E3_ConcilTotal ELSE 0 END) AS n_anio_2021_concil,
+        MAX(CASE WHEN f.n_anio = 2022 THEN f.total_E3_ConcilTotal ELSE 0 END) AS n_anio_2022_concil,
+        MAX(CASE WHEN f.n_anio = 2023 THEN f.total_E3_ConcilTotal ELSE 0 END) AS n_anio_2023_concil,
+        MAX(CASE WHEN f.n_anio = 2024 THEN f.total_E3_ConcilTotal ELSE 0 END) AS n_anio_2024_concil,
+        MAX(CASE WHEN f.n_anio = 2020 THEN f.total_E1_Sentencia ELSE 0 END) AS n_anio_2020_sentencia,
+        MAX(CASE WHEN f.n_anio = 2021 THEN f.total_E1_Sentencia ELSE 0 END) AS n_anio_2021_sentencia,
+        MAX(CASE WHEN f.n_anio = 2022 THEN f.total_E1_Sentencia ELSE 0 END) AS n_anio_2022_sentencia,
+        MAX(CASE WHEN f.n_anio = 2023 THEN f.total_E1_Sentencia ELSE 0 END) AS n_anio_2023_sentencia,
+        MAX(CASE WHEN f.n_anio = 2024 THEN f.total_E1_Sentencia ELSE 0 END) AS n_anio_2024_sentencia
+    FROM 
+        dbo.Qlik_Dependencia1 d
+    JOIN 
+        (SELECT 
+            n_dependencia,
+            Proceso,
+            CASE 
+                WHEN Sub_proceso IN ('Abreviado', 'Ordinario') THEN 'Abreviado y Ordinario' 
+                ELSE Sub_proceso 
+            END AS Sub_proceso,
+            n_anio,
+            SUM(E3_ConcilTotal) AS total_E3_ConcilTotal,
+            SUM(E1_Sentencia) AS total_E1_Sentencia
+        FROM 
+            dbo.Qlik_FEE
+        WHERE
+            Sub_proceso IN ('Abreviado', 'Ordinario')
+        GROUP BY 
+            n_dependencia,
+            Proceso,
+            CASE 
+                WHEN Sub_proceso IN ('Abreviado', 'Ordinario') THEN 'Abreviado y Ordinario' 
+                ELSE Sub_proceso 
+            END,
+            n_anio) f 
+    ON d.n_dependencia = f.n_dependencia
+    WHERE
+        d.Especialidad = 'Laboral' AND
+        f.Proceso = 'NLPT' AND
+        d.Jerarquia = 'Juzgado Especializado'
+    GROUP BY 
+        d.Corte,
+        d.Especialidad,
+        d.Jerarquia,
+        d.Dependencia,
+        f.Proceso,
+        f.Sub_proceso
+),
+CTE_Conciliacion_Especializado_Abreviado_Ordinario AS (
+    SELECT 
+        d.Corte,
+        d.Especialidad,
+        d.Jerarquia,
+        f.Proceso,
+        'Abreviado y Ordinario' AS Sub_proceso,
+        CAST(CAST(ROUND((SUM(CASE WHEN f.n_anio = 2020 THEN f.total_E3_ConcilTotal ELSE 0 END) + 0.00001) / NULLIF((SUM(CASE WHEN f.n_anio = 2020 THEN f.total_E3_ConcilTotal ELSE 0 END) + SUM(CASE WHEN f.n_anio = 2020 THEN f.total_E1_Sentencia ELSE 0 END)), 0) * 100, 0) AS INT) AS VARCHAR) + '%' AS n_anio_2020_ratio,
+        CAST(CAST(ROUND((SUM(CASE WHEN f.n_anio = 2021 THEN f.total_E3_ConcilTotal ELSE 0 END) + 0.00001) / NULLIF((SUM(CASE WHEN f.n_anio = 2021 THEN f.total_E3_ConcilTotal ELSE 0 END) + SUM(CASE WHEN f.n_anio = 2021 THEN f.total_E1_Sentencia ELSE 0 END)), 0) * 100, 0) AS INT) AS VARCHAR) + '%' AS n_anio_2021_ratio,
+        CAST(CAST(ROUND((SUM(CASE WHEN f.n_anio = 2022 THEN f.total_E3_ConcilTotal ELSE 0 END) + 0.00001) / NULLIF((SUM(CASE WHEN f.n_anio = 2022 THEN f.total_E3_ConcilTotal ELSE 0 END) + SUM(CASE WHEN f.n_anio = 2022 THEN f.total_E1_Sentencia ELSE 0 END)), 0) * 100, 0) AS INT) AS VARCHAR) + '%' AS n_anio_2022_ratio,
+        CAST(CAST(ROUND((SUM(CASE WHEN f.n_anio = 2023 THEN f.total_E3_ConcilTotal ELSE 0 END) + 0.00001) / NULLIF((SUM(CASE WHEN f.n_anio = 2023 THEN f.total_E3_ConcilTotal ELSE 0 END) + SUM(CASE WHEN f.n_anio = 2023 THEN f.total_E1_Sentencia ELSE 0 END)), 0) * 100, 0) AS INT) AS VARCHAR) + '%' AS n_anio_2023_ratio,
+        CAST(CAST(ROUND((SUM(CASE WHEN f.n_anio = 2024 THEN f.total_E3_ConcilTotal ELSE 0 END) + 0.00001) / NULLIF((SUM(CASE WHEN f.n_anio = 2024 THEN f.total_E3_ConcilTotal ELSE 0 END) + SUM(CASE WHEN f.n_anio = 2024 THEN f.total_E1_Sentencia ELSE 0 END)), 0) * 100, 0) AS INT) AS VARCHAR) + '%' AS n_anio_2024_ratio,
+        SUM(CASE WHEN f.n_anio = 2020 THEN f.total_E3_ConcilTotal ELSE 0 END) AS n_anio_2020_concil,
+        SUM(CASE WHEN f.n_anio = 2021 THEN f.total_E3_ConcilTotal ELSE 0 END) AS n_anio_2021_concil,
+        SUM(CASE WHEN f.n_anio = 2022 THEN f.total_E3_ConcilTotal ELSE 0 END) AS n_anio_2022_concil,
+        SUM(CASE WHEN f.n_anio = 2023 THEN f.total_E3_ConcilTotal ELSE 0 END) AS n_anio_2023_concil,
+        SUM(CASE WHEN f.n_anio = 2024 THEN f.total_E3_ConcilTotal ELSE 0 END) AS n_anio_2024_concil,
+        SUM(CASE WHEN f.n_anio = 2020 THEN f.total_E1_Sentencia ELSE 0 END) AS n_anio_2020_sentencia,
+        SUM(CASE WHEN f.n_anio = 2021 THEN f.total_E1_Sentencia ELSE 0 END) AS n_anio_2021_sentencia,
+        SUM(CASE WHEN f.n_anio = 2022 THEN f.total_E1_Sentencia ELSE 0 END) AS n_anio_2022_sentencia,
+        SUM(CASE WHEN f.n_anio = 2023 THEN f.total_E1_Sentencia ELSE 0 END) AS n_anio_2023_sentencia,
+        SUM(CASE WHEN f.n_anio = 2024 THEN f.total_E1_Sentencia ELSE 0 END) AS n_anio_2024_sentencia
+    FROM 
+        dbo.Qlik_Dependencia1 d
+    JOIN 
+        (SELECT 
+            n_dependencia,
+            Proceso,
+            CASE 
+                WHEN Sub_proceso IN ('Abreviado', 'Ordinario') THEN 'Abreviado y Ordinario' 
+                ELSE Sub_proceso 
+            END AS Sub_proceso,
+            n_anio,
+            SUM(E3_ConcilTotal) AS total_E3_ConcilTotal,
+            SUM(E1_Sentencia) AS total_E1_Sentencia
+        FROM 
+            dbo.Qlik_FEE
+        WHERE
+            Sub_proceso IN ('Abreviado', 'Ordinario')
+        GROUP BY 
+            n_dependencia,
+            Proceso,
+            CASE 
+                WHEN Sub_proceso IN ('Abreviado', 'Ordinario') THEN 'Abreviado y Ordinario' 
+                ELSE Sub_proceso 
+            END,
+            n_anio) f 
+    ON d.n_dependencia = f.n_dependencia
+    WHERE
+        d.Especialidad = 'Laboral' AND
+        f.Proceso = 'NLPT' AND
+        d.Jerarquia = 'Juzgado Especializado'
+    GROUP BY 
+        d.Corte,
+        d.Especialidad,
+        d.Jerarquia,
+        f.Proceso,
+        f.Sub_proceso
+),
+Juzgamiento_Anticipado_Ordinario_Entero AS (
+    SELECT 
+        d.Corte,
+        d.Especialidad,
+        d.Jerarquia,
+        d.Dependencia,
+        i.Proceso,
+        i.Sub_proceso,
+        CAST(SUM(CASE WHEN i.n_anio = 2020 AND i.n_ind2 = 4 AND i.Sub_proceso = 'Ordinario' AND i.Proceso = 'NLPT' THEN i.cantidad1 ELSE 0 END) + 0.0001 AS INT) AS n_anio_2020_Juzgamiento,
+        CAST(SUM(CASE WHEN i.n_anio = 2021 AND i.n_ind2 = 4 AND i.Sub_proceso = 'Ordinario' AND i.Proceso = 'NLPT' THEN i.cantidad1 ELSE 0 END) + 0.0001 AS INT) AS n_anio_2021_Juzgamiento,
+        CAST(SUM(CASE WHEN i.n_anio = 2022 AND i.n_ind2 = 4 AND i.Sub_proceso = 'Ordinario' AND i.Proceso = 'NLPT' THEN i.cantidad1 ELSE 0 END) + 0.0001 AS INT) AS n_anio_2022_Juzgamiento,
+        CAST(SUM(CASE WHEN i.n_anio = 2023 AND i.n_ind2 = 4 AND i.Sub_proceso = 'Ordinario' AND i.Proceso = 'NLPT' THEN i.cantidad1 ELSE 0 END) + 0.0001 AS INT) AS n_anio_2023_Juzgamiento,
+        CAST(SUM(CASE WHEN i.n_anio = 2024 AND i.n_ind2 = 4 AND i.Sub_proceso = 'Ordinario' AND i.Proceso = 'NLPT' THEN i.cantidad1 ELSE 0 END) + 0.0001 AS INT) AS n_anio_2024_Juzgamiento
+    FROM 
+        dbo.Qlik_Dependencia1 d
+    INNER JOIN 
+        dbo.Qlik_indicadores2 i ON d.n_dependencia = i.n_dependencia
+    WHERE 
+        i.Proceso = 'NLPT' AND 
+        i.Sub_proceso = 'Ordinario' AND 
+        d.Especialidad = 'Laboral' AND 
+        d.Jerarquia = 'Juzgado Especializado'
+    GROUP BY 
+        d.Corte,
+        d.Especialidad,
+        d.Jerarquia,
+        d.Dependencia,
+        i.Proceso,
+        i.Sub_proceso
+),
+Juzgamiento_Porcentaje_Total AS (
+    SELECT 
+        d.Corte,
+        d.Especialidad,
+        d.Jerarquia,
+        SUM(CASE WHEN i.n_anio = 2020 AND i.n_ind2 = 4 AND i.Sub_proceso = 'Ordinario' AND i.Proceso = 'NLPT' THEN i.cantidad1 ELSE 0 END) + 0.0001 AS n_anio_2020_Juzgamiento,
+        SUM(CASE WHEN i.n_anio = 2021 AND i.n_ind2 = 4 AND i.Sub_proceso = 'Ordinario' AND i.Proceso = 'NLPT' THEN i.cantidad1 ELSE 0 END) + 0.0001 AS n_anio_2021_Juzgamiento,
+        SUM(CASE WHEN i.n_anio = 2022 AND i.n_ind2 = 4 AND i.Sub_proceso = 'Ordinario' AND i.Proceso = 'NLPT' THEN i.cantidad1 ELSE 0 END) + 0.0001 AS n_anio_2022_Juzgamiento,
+        SUM(CASE WHEN i.n_anio = 2023 AND i.n_ind2 = 4 AND i.Sub_proceso = 'Ordinario' AND i.Proceso = 'NLPT' THEN i.cantidad1 ELSE 0 END) + 0.0001 AS n_anio_2023_Juzgamiento,
+        SUM(CASE WHEN i.n_anio = 2024 AND i.n_ind2 = 4 AND i.Sub_proceso = 'Ordinario' AND i.Proceso = 'NLPT' THEN i.cantidad1 ELSE 0 END) + 0.0001 AS n_anio_2024_Juzgamiento
+    FROM 
+        dbo.Qlik_Dependencia1 d
+    INNER JOIN 
+        dbo.Qlik_indicadores2 i ON d.n_dependencia = i.n_dependencia
+    WHERE 
+        i.Proceso = 'NLPT' AND 
+        i.Sub_proceso = 'Ordinario' AND 
+        d.Especialidad = 'Laboral' AND 
+        d.Jerarquia = 'Juzgado Especializado'
+    GROUP BY 
+        d.Corte,
+        d.Especialidad,
+        d.Jerarquia
+),
+Sentencia_Total_Porcentaje AS (
+    SELECT
+        D.Corte,
+        D.Especialidad,
+        D.Jerarquia,
+        SUM(CASE WHEN F.n_anio = 2020 THEN F.E1_Sentencia ELSE 0 END) AS n_anio_2020_1Sentencia,
+        SUM(CASE WHEN F.n_anio = 2021 THEN F.E1_Sentencia ELSE 0 END) AS n_anio_2021_1Sentencia,
+        SUM(CASE WHEN F.n_anio = 2022 THEN F.E1_Sentencia ELSE 0 END) AS n_anio_2022_1Sentencia,
+        SUM(CASE WHEN F.n_anio = 2023 THEN F.E1_Sentencia ELSE 0 END) AS n_anio_2023_1Sentencia,
+        SUM(CASE WHEN F.n_anio = 2024 THEN F.E1_Sentencia ELSE 0 END) AS n_anio_2024_1Sentencia
+    FROM
+        dbo.Qlik_Dependencia1 D
+    LEFT JOIN
+        dbo.Qlik_FEE F ON D.n_dependencia = F.n_dependencia
+    WHERE
+        F.Proceso = 'NLPT'
+        AND F.Sub_proceso = 'Ordinario'
+        AND D.Especialidad = 'Laboral'
+        AND D.Jerarquia = 'Juzgado Especializado'
+    GROUP BY
+        D.Corte,
+        D.Especialidad,
+        D.Jerarquia
+),
+Juzgamiento_Porcentaje_Total_Calculado AS (
+    SELECT
+        J.Corte,
+        J.Especialidad,
+        J.Jerarquia,
+        CAST(CAST(ROUND((J.n_anio_2020_Juzgamiento / NULLIF(S.n_anio_2020_1Sentencia, 0)) * 100, 0) AS INT) AS VARCHAR) + '%' AS Ratio_2020,
+        CAST(CAST(ROUND((J.n_anio_2021_Juzgamiento / NULLIF(S.n_anio_2021_1Sentencia, 0)) * 100, 0) AS INT) AS VARCHAR) + '%' AS Ratio_2021,
+        CAST(CAST(ROUND((J.n_anio_2022_Juzgamiento / NULLIF(S.n_anio_2022_1Sentencia, 0)) * 100, 0) AS INT) AS VARCHAR) + '%' AS Ratio_2022,
+        CAST(CAST(ROUND((J.n_anio_2023_Juzgamiento / NULLIF(S.n_anio_2023_1Sentencia, 0)) * 100, 0) AS INT) AS VARCHAR) + '%' AS Ratio_2023,
+        CAST(CAST(ROUND((J.n_anio_2024_Juzgamiento / NULLIF(S.n_anio_2024_1Sentencia, 0)) * 100, 0) AS INT) AS VARCHAR) + '%' AS Ratio_2024
+    FROM
+        Juzgamiento_Porcentaje_Total J
+    INNER JOIN
+        Sentencia_Total_Porcentaje S ON J.Corte = S.Corte
+                    AND J.Especialidad = S.Especialidad
+                    AND J.Jerarquia = S.Jerarquia
+),
+Juzgamiento_Anticipado_Ordinario_Total_Entero AS (
+    SELECT 
+        d.Corte,
+        d.Especialidad,
+        d.Jerarquia,
+        i.Proceso,
+        i.Sub_proceso,
+        CAST(SUM(CASE WHEN i.n_anio = 2020 AND i.n_ind2 = 4 AND i.Sub_proceso = 'Ordinario' AND i.Proceso = 'NLPT' THEN i.cantidad1 ELSE 0 END) + 0.0001 AS INT) AS n_anio_2020_Juzgamiento,
+        CAST(SUM(CASE WHEN i.n_anio = 2021 AND i.n_ind2 = 4 AND i.Sub_proceso = 'Ordinario' AND i.Proceso = 'NLPT' THEN i.cantidad1 ELSE 0 END) + 0.0001 AS INT) AS n_anio_2021_Juzgamiento,
+        CAST(SUM(CASE WHEN i.n_anio = 2022 AND i.n_ind2 = 4 AND i.Sub_proceso = 'Ordinario' AND i.Proceso = 'NLPT' THEN i.cantidad1 ELSE 0 END) + 0.0001 AS INT) AS n_anio_2022_Juzgamiento,
+        CAST(SUM(CASE WHEN i.n_anio = 2023 AND i.n_ind2 = 4 AND i.Sub_proceso = 'Ordinario' AND i.Proceso = 'NLPT' THEN i.cantidad1 ELSE 0 END) + 0.0001 AS INT) AS n_anio_2023_Juzgamiento,
+        CAST(SUM(CASE WHEN i.n_anio = 2024 AND i.n_ind2 = 4 AND i.Sub_proceso = 'Ordinario' AND i.Proceso = 'NLPT' THEN i.cantidad1 ELSE 0 END) + 0.0001 AS INT) AS n_anio_2024_Juzgamiento
+    FROM 
+        dbo.Qlik_Dependencia1 d
+    INNER JOIN 
+        dbo.Qlik_indicadores2 i ON d.n_dependencia = i.n_dependencia
+    WHERE 
+        i.Proceso = 'NLPT' AND 
+        i.Sub_proceso = 'Ordinario' AND 
+        d.Especialidad = 'Laboral' AND 
+        d.Jerarquia = 'Juzgado Especializado'
+    GROUP BY 
+        d.Corte,
+        d.Especialidad,
+        d.Jerarquia,
+        i.Proceso,
+        i.Sub_proceso
+),
+Audiencias_Reprogramadas_Abreviado_Ordinario_NLPT AS (
+    SELECT 
+		d.n_dependencia,
+        d.Corte,
+        d.Especialidad,
+        d.Jerarquia,
+        d.Dependencia,
+        d.Provincia,
+        f.Proceso,
+        CASE 
+            WHEN f.Sub_proceso IN ('Abreviado', 'Ordinario') THEN 'Abreviado y Ordinario'
+            ELSE f.Sub_proceso
+        END AS Sub_proceso,
+        CAST(CAST(ROUND((1 - SUM(CASE WHEN i.n_anio = 2020 AND i.n_ind2 = 2 THEN i.cantidad1 END) / NULLIF(SUM(CASE WHEN i.n_anio = 2020 AND i.n_ind2 = 2 THEN i.cantidad2 END), 0)) * 100, 0) AS INT) AS VARCHAR) + '%' AS n_anio_2020_Audiencias,
+        CAST(CAST(ROUND((1 - SUM(CASE WHEN i.n_anio = 2021 AND i.n_ind2 = 2 THEN i.cantidad1 END) / NULLIF(SUM(CASE WHEN i.n_anio = 2021 AND i.n_ind2 = 2 THEN i.cantidad2 END), 0)) * 100, 0) AS INT) AS VARCHAR) + '%' AS n_anio_2021_Audiencias,
+        CAST(CAST(ROUND((1 - SUM(CASE WHEN i.n_anio = 2022 AND i.n_ind2 = 2 THEN i.cantidad1 END) / NULLIF(SUM(CASE WHEN i.n_anio = 2022 AND i.n_ind2 = 2 THEN i.cantidad2 END), 0)) * 100, 0) AS INT) AS VARCHAR) + '%' AS n_anio_2022_Audiencias,
+        CAST(CAST(ROUND((1 - SUM(CASE WHEN i.n_anio = 2023 AND i.n_ind2 = 2 THEN i.cantidad1 END) / NULLIF(SUM(CASE WHEN i.n_anio = 2023 AND i.n_ind2 = 2 THEN i.cantidad2 END), 0)) * 100, 0) AS INT) AS VARCHAR) + '%' AS n_anio_2023_Audiencias,
+        CAST(CAST(ROUND((1 - SUM(CASE WHEN i.n_anio = 2024 AND i.n_ind2 = 2 THEN i.cantidad1 END) / NULLIF(SUM(CASE WHEN i.n_anio = 2024 AND i.n_ind2 = 2 THEN i.cantidad2 END), 0)) * 100, 0) AS INT) AS VARCHAR) + '%' AS n_anio_2024_Audiencias
+    FROM 
+        dbo.Qlik_Dependencia1 d
+    JOIN 
+        (SELECT 
+            n_dependencia,
+            Proceso,
+            CASE 
+                WHEN Sub_proceso IN ('Abreviado', 'Ordinario') THEN 'Abreviado y Ordinario' 
+                ELSE Sub_proceso 
+            END AS Sub_proceso,
+            SUM(E3_ConcilTotal) AS total_E3_ConcilTotal,
+            SUM(E1_Sentencia) AS total_E1_Sentencia
+        FROM 
+            dbo.Qlik_FEE
+        GROUP BY 
+            n_dependencia,
+            Proceso,
+            CASE 
+                WHEN Sub_proceso IN ('Abreviado', 'Ordinario') THEN 'Abreviado y Ordinario' 
+                ELSE Sub_proceso 
+            END) f 
+    ON d.n_dependencia = f.n_dependencia
+    JOIN 
+        dbo.Qlik_indicadores2 i ON d.n_dependencia = i.n_dependencia
+    WHERE
+        d.Especialidad = 'Laboral' AND
+        f.Proceso = 'NLPT' AND
+        f.Sub_Proceso = 'Abreviado y Ordinario'
+    GROUP BY 
+		d.n_dependencia,
+        d.Corte,
+        d.Especialidad,
+        d.Jerarquia,
+        d.Dependencia,
+        d.Provincia,
+        f.Proceso,
+        CASE 
+            WHEN f.Sub_proceso IN ('Abreviado', 'Ordinario') THEN 'Abreviado y Ordinario' 
+            ELSE f.Sub_proceso 
+        END
+),
+Audiencias_Reprogramadas_Abreviado_Ordinario_Total_NLPT AS (
+    SELECT 
+		d.n_dependencia,
+        d.Corte,
+        d.Especialidad,
+        d.Jerarquia,
+        d.Provincia,
+        f.Proceso,
+        CASE 
+            WHEN f.Sub_proceso IN ('Abreviado', 'Ordinario') THEN 'Abreviado y Ordinario'
+            ELSE f.Sub_proceso
+        END AS Sub_proceso,
+        CAST(CAST(ROUND((1 - SUM(CASE WHEN i.n_anio = 2020 AND i.n_ind2 = 2 THEN i.cantidad1 END) / NULLIF(SUM(CASE WHEN i.n_anio = 2020 AND i.n_ind2 = 2 THEN i.cantidad2 END), 0)) * 100, 0) AS INT) AS VARCHAR) + '%' AS n_anio_2020_Audiencias,
+        CAST(CAST(ROUND((1 - SUM(CASE WHEN i.n_anio = 2021 AND i.n_ind2 = 2 THEN i.cantidad1 END) / NULLIF(SUM(CASE WHEN i.n_anio = 2021 AND i.n_ind2 = 2 THEN i.cantidad2 END), 0)) * 100, 0) AS INT) AS VARCHAR) + '%' AS n_anio_2021_Audiencias,
+        CAST(CAST(ROUND((1 - SUM(CASE WHEN i.n_anio = 2022 AND i.n_ind2 = 2 THEN i.cantidad1 END) / NULLIF(SUM(CASE WHEN i.n_anio = 2022 AND i.n_ind2 = 2 THEN i.cantidad2 END), 0)) * 100, 0) AS INT) AS VARCHAR) + '%' AS n_anio_2022_Audiencias,
+        CAST(CAST(ROUND((1 - SUM(CASE WHEN i.n_anio = 2023 AND i.n_ind2 = 2 THEN i.cantidad1 END) / NULLIF(SUM(CASE WHEN i.n_anio = 2023 AND i.n_ind2 = 2 THEN i.cantidad2 END), 0)) * 100, 0) AS INT) AS VARCHAR) + '%' AS n_anio_2023_Audiencias,
+        CAST(CAST(ROUND((1 - SUM(CASE WHEN i.n_anio = 2024 AND i.n_ind2 = 2 THEN i.cantidad1 END) / NULLIF(SUM(CASE WHEN i.n_anio = 2024 AND i.n_ind2 = 2 THEN i.cantidad2 END), 0)) * 100, 0) AS INT) AS VARCHAR) + '%' AS n_anio_2024_Audiencias
+    FROM 
+        dbo.Qlik_Dependencia1 d
+    JOIN 
+        (SELECT 
+            n_dependencia,
+            Proceso,
+            CASE 
+                WHEN Sub_proceso IN ('Abreviado', 'Ordinario') THEN 'Abreviado y Ordinario' 
+                ELSE Sub_proceso 
+            END AS Sub_proceso,
+            SUM(E3_ConcilTotal) AS total_E3_ConcilTotal,
+            SUM(E1_Sentencia) AS total_E1_Sentencia
+        FROM 
+            dbo.Qlik_FEE
+        GROUP BY 
+            n_dependencia,
+            Proceso,
+            CASE 
+                WHEN Sub_proceso IN ('Abreviado', 'Ordinario') THEN 'Abreviado y Ordinario' 
+                ELSE Sub_proceso 
+            END) f 
+    ON d.n_dependencia = f.n_dependencia
+    JOIN 
+        dbo.Qlik_indicadores2 i ON d.n_dependencia = i.n_dependencia
+    WHERE
+        d.Especialidad = 'Laboral' AND
+        f.Proceso = 'NLPT' AND
+        f.Sub_Proceso = 'Abreviado y Ordinario'
+    GROUP BY 
+		d.n_dependencia,
+        d.Corte,
+        d.Especialidad,
+        d.Jerarquia,
+        d.Provincia,
+        f.Proceso,
+        CASE 
+            WHEN f.Sub_proceso IN ('Abreviado', 'Ordinario') THEN 'Abreviado y Ordinario' 
+            ELSE f.Sub_proceso 
+        END
+),
+Porcentaje_Nulidades_Abreviado_NLPT AS (
+    SELECT 
+        D.Corte, 
+        D.Especialidad, 
+        D.Jerarquia, 
+        D.Dependencia,
+        F.Proceso, 
+        F.Sub_proceso,
+        CAST(CAST(ROUND((
+            SUM(CASE WHEN F.n_anio = 2020 THEN F.E7_Anula END) + 0.00001) / 
+            NULLIF(SUM(CASE WHEN F.n_anio = 2020 THEN F.E7_Anula + F.E6_Revoca + F.E5_Confirma END), 0) * 100, 0) AS INT) AS VARCHAR) + '%' AS n_anio_2020_Nulidades,
+        CAST(CAST(ROUND((
+            SUM(CASE WHEN F.n_anio = 2021 THEN F.E7_Anula END) + 0.00001) / 
+            NULLIF(SUM(CASE WHEN F.n_anio = 2021 THEN F.E7_Anula + F.E6_Revoca + F.E5_Confirma END), 0) * 100, 0) AS INT) AS VARCHAR) + '%' AS n_anio_2021_Nulidades,
+        CAST(CAST(ROUND((
+            SUM(CASE WHEN F.n_anio = 2022 THEN F.E7_Anula END) + 0.00001) / 
+            NULLIF(SUM(CASE WHEN F.n_anio = 2022 THEN F.E7_Anula + F.E6_Revoca + F.E5_Confirma END), 0) * 100, 0) AS INT) AS VARCHAR) + '%' AS n_anio_2022_Nulidades,
+        CAST(CAST(ROUND((
+            SUM(CASE WHEN F.n_anio = 2023 THEN F.E7_Anula END) + 0.00001) / 
+            NULLIF(SUM(CASE WHEN F.n_anio = 2023 THEN F.E7_Anula + F.E6_Revoca + F.E5_Confirma END), 0) * 100, 0) AS INT) AS VARCHAR) + '%' AS n_anio_2023_Nulidades,
+        CAST(CAST(ROUND((
+            SUM(CASE WHEN F.n_anio = 2024 THEN F.E7_Anula END) + 0.00001) / 
+            NULLIF(SUM(CASE WHEN F.n_anio = 2024 THEN F.E7_Anula + F.E6_Revoca + F.E5_Confirma END), 0) * 100, 0) AS INT) AS VARCHAR) + '%' AS n_anio_2024_Nulidades,
+        SUM(CASE WHEN F.n_anio = 2020 THEN F.E7_Anula ELSE 0 END) AS n_anio_2020_2instancia,
+        SUM(CASE WHEN F.n_anio = 2021 THEN F.E7_Anula ELSE 0 END) AS n_anio_2021_2instancia,
+        SUM(CASE WHEN F.n_anio = 2022 THEN F.E7_Anula ELSE 0 END) AS n_anio_2022_2instancia,
+        SUM(CASE WHEN F.n_anio = 2023 THEN F.E7_Anula ELSE 0 END) AS n_anio_2023_2instancia,
+        SUM(CASE WHEN F.n_anio = 2024 THEN F.E7_Anula ELSE 0 END) AS n_anio_2024_2instancia
+    FROM 
+        dbo.Qlik_Dependencia1 AS D
+    JOIN 
+        dbo.Qlik_FEE AS F
+    ON 
+        D.n_dependencia = F.n_dependencia
+    WHERE
+        D.Especialidad = 'Laboral' AND
+        D.Jerarquia = 'Juzgado Especializado' AND
+        F.Proceso = 'NLPT' AND
+        F.Sub_proceso = 'Abreviado'
+    GROUP BY 
+        D.Corte, 
+        D.Especialidad, 
+        D.Jerarquia, 
+        D.Dependencia,
+        F.Proceso, 
+        F.Sub_proceso
+),
+Porcentaje_Nulidades_Abreviado_Total_NLPT AS (
+    SELECT 
+        D.Corte, 
+        D.Especialidad, 
+        D.Jerarquia, 
+        F.Proceso, 
+        F.Sub_proceso,
+        CAST(CAST(ROUND((
+            SUM(CASE WHEN F.n_anio = 2020 THEN F.E7_Anula END) + 0.00001) / 
+            NULLIF(SUM(CASE WHEN F.n_anio = 2020 THEN F.E7_Anula + F.E6_Revoca + F.E5_Confirma END), 0) * 100, 0) AS INT) AS VARCHAR) + '%' AS n_anio_2020_Nulidades,
+        CAST(CAST(ROUND((
+            SUM(CASE WHEN F.n_anio = 2021 THEN F.E7_Anula END) + 0.00001) / 
+            NULLIF(SUM(CASE WHEN F.n_anio = 2021 THEN F.E7_Anula + F.E6_Revoca + F.E5_Confirma END), 0) * 100, 0) AS INT) AS VARCHAR) + '%' AS n_anio_2021_Nulidades,
+        CAST(CAST(ROUND((
+            SUM(CASE WHEN F.n_anio = 2022 THEN F.E7_Anula END) + 0.00001) / 
+            NULLIF(SUM(CASE WHEN F.n_anio = 2022 THEN F.E7_Anula + F.E6_Revoca + F.E5_Confirma END), 0) * 100, 0) AS INT) AS VARCHAR) + '%' AS n_anio_2022_Nulidades,
+        CAST(CAST(ROUND((
+            SUM(CASE WHEN F.n_anio = 2023 THEN F.E7_Anula END) + 0.00001) / 
+            NULLIF(SUM(CASE WHEN F.n_anio = 2023 THEN F.E7_Anula + F.E6_Revoca + F.E5_Confirma END), 0) * 100, 0) AS INT) AS VARCHAR) + '%' AS n_anio_2023_Nulidades,
+        CAST(CAST(ROUND((
+            SUM(CASE WHEN F.n_anio = 2024 THEN F.E7_Anula END) + 0.00001) / 
+            NULLIF(SUM(CASE WHEN F.n_anio = 2024 THEN F.E7_Anula + F.E6_Revoca + F.E5_Confirma END), 0) * 100, 0) AS INT) AS VARCHAR) + '%' AS n_anio_2024_Nulidades,
+        SUM(CASE WHEN F.n_anio = 2020 THEN F.E7_Anula ELSE 0 END) AS n_anio_2020_2instancia,
+        SUM(CASE WHEN F.n_anio = 2021 THEN F.E7_Anula ELSE 0 END) AS n_anio_2021_2instancia,
+        SUM(CASE WHEN F.n_anio = 2022 THEN F.E7_Anula ELSE 0 END) AS n_anio_2022_2instancia,
+        SUM(CASE WHEN F.n_anio = 2023 THEN F.E7_Anula ELSE 0 END) AS n_anio_2023_2instancia,
+        SUM(CASE WHEN F.n_anio = 2024 THEN F.E7_Anula ELSE 0 END) AS n_anio_2024_2instancia
+    FROM 
+        dbo.Qlik_Dependencia1 AS D
+    JOIN 
+        dbo.Qlik_FEE AS F
+    ON 
+        D.n_dependencia = F.n_dependencia
+    WHERE
+        D.Especialidad = 'Laboral' AND
+        D.Jerarquia = 'Juzgado Especializado' AND
+        F.Proceso = 'NLPT' AND
+        F.Sub_proceso = 'Abreviado'
+    GROUP BY 
+        D.Corte, 
+        D.Especialidad, 
+        D.Jerarquia, 
+        F.Proceso, 
+        F.Sub_proceso
+),
+CTE_Celeridad AS (
+    SELECT
+        qd.Corte,
+        qd.Especialidad,
+        qd.Jerarquia,
+        qd.Dependencia,
+        qi.Proceso,
+        qi.Sub_proceso,
+        qi.n_anio,
+        ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY qi.tiempo2) 
+            OVER (PARTITION BY qi.n_dependencia, qi.n_anio, qi.n_ind), 0) AS Celeridad,
+        qi.n_ind
+    FROM
+        dbo.Qlik_Dependencia1 qd
+    JOIN
+        dbo.Qlik_indicadores qi ON qd.n_dependencia = qi.n_dependencia
+    WHERE
+        qi.n_ind IN (101, 102, 103)
+        AND qd.Especialidad = 'Laboral'
+        AND qd.Jerarquia = 'Juzgado Especializado'
+        AND qi.Proceso = 'NLPT'
+        AND qi.Sub_proceso IN ('Abreviado', 'Ordinario')
+),
+Celeridad_Calificacion AS (
+    SELECT
+        c.Corte,
+        c.Especialidad,
+        c.Jerarquia,
+        c.Dependencia,
+        c.Proceso,
+        'Abreviado y Ordinario' AS Sub_proceso,
+        MAX(CASE WHEN c.n_anio = 2020 AND c.n_ind = 101 THEN c.Celeridad END) AS n_anio_2020_Celeridad_Cal,
+        MAX(CASE WHEN c.n_anio = 2021 AND c.n_ind = 101 THEN c.Celeridad END) AS n_anio_2021_Celeridad_Cal,
+        MAX(CASE WHEN c.n_anio = 2022 AND c.n_ind = 101 THEN c.Celeridad END) AS n_anio_2022_Celeridad_Cal,
+        MAX(CASE WHEN c.n_anio = 2023 AND c.n_ind = 101 THEN c.Celeridad END) AS n_anio_2023_Celeridad_Cal,
+        MAX(CASE WHEN c.n_anio = 2024 AND c.n_ind = 101 THEN c.Celeridad END) AS n_anio_2024_Celeridad_Cal,
+        MAX(CASE WHEN c.n_anio = 2020 AND c.n_ind = 102 THEN c.Celeridad END) AS n_anio_2020_Celeridad_1inst,
+        MAX(CASE WHEN c.n_anio = 2021 AND c.n_ind = 102 THEN c.Celeridad END) AS n_anio_2021_Celeridad_1inst,
+        MAX(CASE WHEN c.n_anio = 2022 AND c.n_ind = 102 THEN c.Celeridad END) AS n_anio_2022_Celeridad_1inst,
+        MAX(CASE WHEN c.n_anio = 2023 AND c.n_ind = 102 THEN c.Celeridad END) AS n_anio_2023_Celeridad_1inst,
+        MAX(CASE WHEN c.n_anio = 2024 AND c.n_ind = 102 THEN c.Celeridad END) AS n_anio_2024_Celeridad_1inst,
+        MAX(CASE WHEN c.n_anio = 2020 AND c.n_ind = 103 THEN c.Celeridad END) AS n_anio_2020_Celeridad_2inst,
+        MAX(CASE WHEN c.n_anio = 2021 AND c.n_ind = 103 THEN c.Celeridad END) AS n_anio_2021_Celeridad_2inst,
+        MAX(CASE WHEN c.n_anio = 2022 AND c.n_ind = 103 THEN c.Celeridad END) AS n_anio_2022_Celeridad_2inst,
+        MAX(CASE WHEN c.n_anio = 2023 AND c.n_ind = 103 THEN c.Celeridad END) AS n_anio_2023_Celeridad_2inst,
+        MAX(CASE WHEN c.n_anio = 2024 AND c.n_ind = 103 THEN c.Celeridad END) AS n_anio_2024_Celeridad_2inst
+    FROM
+        CTE_Celeridad c
+    GROUP BY
+        c.Corte,
+        c.Especialidad,
+        c.Jerarquia,
+        c.Dependencia,
+        c.Proceso
+),
+CTE_Celeridad_TOTAL AS (
+    SELECT
+        qd.n_dependencia,
+        qd.Corte,
+        qd.Dependencia,
+        qd.Especialidad,
+        qd.Jerarquia,
+        qi.Proceso,
+        'Abreviado y Ordinario' AS Sub_proceso,
+        qi.n_anio,
+        qi.tiempo2,
+        qi.n_ind
+    FROM
+        dbo.Qlik_Dependencia1 qd
+    JOIN
+        dbo.Qlik_indicadores qi ON qd.n_dependencia = qi.n_dependencia
+    WHERE
+        qi.n_ind IN (101, 102, 103)
+        AND qd.Especialidad = 'Laboral'
+        AND qd.Jerarquia = 'Juzgado Especializado'
+        AND qi.Proceso = 'NLPT'
+        AND qi.Sub_proceso IN ('Abreviado', 'Ordinario')
+        AND qi.n_anio IN (2020, 2021, 2022, 2023, 2024)
+),
+CTE_Celeridad_Mediana_TOTAL AS (
+    SELECT
+        n_dependencia,
+        Corte,
+        Dependencia,
+        Especialidad,
+        Jerarquia,
+        Proceso,
+        Sub_proceso,
+        n_anio,
+        n_ind,
+        ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY tiempo2) OVER (PARTITION BY Corte, Especialidad, Jerarquia, Proceso, n_anio, n_ind), 0) AS Celeridad_Cal
+    FROM
+        CTE_Celeridad_TOTAL
+),
+CTE_Celeridad_FULL AS (
+    SELECT
+        qd.Corte,
+        qd.Especialidad,
+        qd.Jerarquia,
+        qd.Dependencia,
+        qi.Proceso,
+        qi.n_anio,
+        ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY qi.tiempo2) 
+              OVER (PARTITION BY qi.n_dependencia, qi.n_anio, qi.n_ind), 0) AS Celeridad,
+        CASE 
+            WHEN qi.n_ind = 101 THEN 'Celeridad_Cal'
+            WHEN qi.n_ind = 102 THEN 'Celeridad_1inst'
+        END AS Tipo_Celeridad
+    FROM
+        dbo.Qlik_Dependencia1 qd
+    JOIN
+        dbo.Qlik_indicadores qi ON qd.n_dependencia = qi.n_dependencia
+    WHERE
+        qd.Especialidad = 'Laboral'
+        AND qd.Jerarquia = 'Juzgado Especializado'
+        AND qi.Proceso = 'PCALP'
+        AND qi.Sub_proceso IN ('Ordinario', 'Urgente', 'Especial')
+        AND qi.n_ind IN (101, 102)
+),
+Celeridad_Full_Calificacion AS (
+    SELECT
+        c.Corte,
+        c.Especialidad,
+        c.Jerarquia,
+        c.Dependencia,
+        c.Proceso,
+        'Ordinario, Urgente y Especial' AS Sub_proceso,
+        MAX(CASE WHEN c.n_anio = 2020 AND c.Tipo_Celeridad = 'Celeridad_Cal' THEN c.Celeridad END) AS n_anio_2020_Celeridad_Cal,
+        MAX(CASE WHEN c.n_anio = 2021 AND c.Tipo_Celeridad = 'Celeridad_Cal' THEN c.Celeridad END) AS n_anio_2021_Celeridad_Cal,
+        MAX(CASE WHEN c.n_anio = 2022 AND c.Tipo_Celeridad = 'Celeridad_Cal' THEN c.Celeridad END) AS n_anio_2022_Celeridad_Cal,
+        MAX(CASE WHEN c.n_anio = 2023 AND c.Tipo_Celeridad = 'Celeridad_Cal' THEN c.Celeridad END) AS n_anio_2023_Celeridad_Cal,
+        MAX(CASE WHEN c.n_anio = 2024 AND c.Tipo_Celeridad = 'Celeridad_Cal' THEN c.Celeridad END) AS n_anio_2024_Celeridad_Cal,
+        MAX(CASE WHEN c.n_anio = 2020 AND c.Tipo_Celeridad = 'Celeridad_1inst' THEN c.Celeridad END) AS n_anio_2020_Celeridad_1inst,
+        MAX(CASE WHEN c.n_anio = 2021 AND c.Tipo_Celeridad = 'Celeridad_1inst' THEN c.Celeridad END) AS n_anio_2021_Celeridad_1inst,
+        MAX(CASE WHEN c.n_anio = 2022 AND c.Tipo_Celeridad = 'Celeridad_1inst' THEN c.Celeridad END) AS n_anio_2022_Celeridad_1inst,
+        MAX(CASE WHEN c.n_anio = 2023 AND c.Tipo_Celeridad = 'Celeridad_1inst' THEN c.Celeridad END) AS n_anio_2023_Celeridad_1inst,
+        MAX(CASE WHEN c.n_anio = 2024 AND c.Tipo_Celeridad = 'Celeridad_1inst' THEN c.Celeridad END) AS n_anio_2024_Celeridad_1inst
+    FROM
+        CTE_Celeridad_FULL c
+    GROUP BY
+        c.Corte,
+        c.Especialidad,
+        c.Jerarquia,
+        c.Dependencia,
+        c.Proceso
+),
+CTE_Celeridad_TOTAL_FULL AS (
+    SELECT
+        qd.Corte,
+        qd.Especialidad,
+        qd.Jerarquia,
+        qi.Proceso,
+        'Ordinario, Urgente y Especial' AS Sub_proceso,
+        qi.n_anio,
+        qi.tiempo2,
+        qi.n_ind
+    FROM
+        dbo.Qlik_Dependencia1 qd
+    JOIN
+        dbo.Qlik_indicadores qi ON qd.n_dependencia = qi.n_dependencia
+    WHERE
+        qi.n_ind IN (101, 102)
+        AND qd.Especialidad = 'Laboral'
+        AND qd.Jerarquia = 'Juzgado Especializado'
+        AND qi.Proceso = 'PCALP'
+        AND qi.Sub_proceso IN ('Ordinario', 'Urgente', 'Especial')
+        AND qi.n_anio IN (2020, 2021, 2022, 2023, 2024)
+),
+CTE_Celeridad_Mediana_TOTAL_FULL AS (
+    SELECT
+        Corte,
+        Especialidad,
+        Jerarquia,
+        Proceso,
+        Sub_proceso,
+        n_anio,
+        n_ind,
+        ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY tiempo2) OVER (PARTITION BY Corte, Especialidad, Jerarquia, Proceso, n_anio, n_ind), 0) AS Celeridad_Cal_Total
+    FROM
+        CTE_Celeridad_TOTAL_FULL
+),
+Celeridad_Mediana_TOTAL_FULL_AGG AS (
+    SELECT
+        c.Corte,
+        c.Especialidad,
+        c.Jerarquia,
+        c.Proceso,
+        'Ordinario, Urgente y Especial' AS Sub_proceso,
+        MAX(CASE WHEN c.n_anio = 2020 AND c.n_ind = 101 THEN c.Celeridad_Cal_Total END) AS n_anio_2020_Celeridad_Cal_Total,
+        MAX(CASE WHEN c.n_anio = 2021 AND c.n_ind = 101 THEN c.Celeridad_Cal_Total END) AS n_anio_2021_Celeridad_Cal_Total,
+        MAX(CASE WHEN c.n_anio = 2022 AND c.n_ind = 101 THEN c.Celeridad_Cal_Total END) AS n_anio_2022_Celeridad_Cal_Total,
+        MAX(CASE WHEN c.n_anio = 2023 AND c.n_ind = 101 THEN c.Celeridad_Cal_Total END) AS n_anio_2023_Celeridad_Cal_Total,
+        MAX(CASE WHEN c.n_anio = 2024 AND c.n_ind = 101 THEN c.Celeridad_Cal_Total END) AS n_anio_2024_Celeridad_Cal_Total,
+        MAX(CASE WHEN c.n_anio = 2020 AND c.n_ind = 102 THEN c.Celeridad_Cal_Total END) AS n_anio_2020_Celeridad_1inst_Total,
+        MAX(CASE WHEN c.n_anio = 2021 AND c.n_ind = 102 THEN c.Celeridad_Cal_Total END) AS n_anio_2021_Celeridad_1inst_Total,
+        MAX(CASE WHEN c.n_anio = 2022 AND c.n_ind = 102 THEN c.Celeridad_Cal_Total END) AS n_anio_2022_Celeridad_1inst_Total,
+        MAX(CASE WHEN c.n_anio = 2023 AND c.n_ind = 102 THEN c.Celeridad_Cal_Total END) AS n_anio_2023_Celeridad_1inst_Total,
+        MAX(CASE WHEN c.n_anio = 2024 AND c.n_ind = 102 THEN c.Celeridad_Cal_Total END) AS n_anio_2024_Celeridad_1inst_Total
+    FROM
+        CTE_Celeridad_Mediana_TOTAL_FULL c
+    GROUP BY
+        c.Corte,
+        c.Especialidad,
+        c.Jerarquia,
+        c.Proceso
+),
+Porcentaje_Nulidades_Abreviado_Especial_Sala AS (
+    SELECT 
+        D.Corte, 
+        D.Especialidad, 
+        D.Jerarquia, 
+        D.Dependencia,
+        F.Proceso, 
+        'Abreviado y Especial' AS Sub_proceso,
+        CAST(CAST(ROUND((
+            SUM(CASE WHEN F.n_anio = 2020 THEN F.E7_Anula END) + 0.00001) / 
+            NULLIF(SUM(CASE WHEN F.n_anio = 2020 THEN F.E7_Anula + F.E6_Revoca + F.E5_Confirma END), 0) * 100, 0) AS INT) AS VARCHAR) + '%' AS n_anio_2020_Nulidades_Sala,
+        CAST(CAST(ROUND((
+            SUM(CASE WHEN F.n_anio = 2021 THEN F.E7_Anula END) + 0.00001) / 
+            NULLIF(SUM(CASE WHEN F.n_anio = 2021 THEN F.E7_Anula + F.E6_Revoca + F.E5_Confirma END), 0) * 100, 0) AS INT) AS VARCHAR) + '%' AS n_anio_2021_Nulidades_Sala,
+        CAST(CAST(ROUND((
+            SUM(CASE WHEN F.n_anio = 2022 THEN F.E7_Anula END) + 0.00001) / 
+            NULLIF(SUM(CASE WHEN F.n_anio = 2022 THEN F.E7_Anula + F.E6_Revoca + F.E5_Confirma END), 0) * 100, 0) AS INT) AS VARCHAR) + '%' AS n_anio_2022_Nulidades_Sala,
+        CAST(CAST(ROUND((
+            SUM(CASE WHEN F.n_anio = 2023 THEN F.E7_Anula END) + 0.00001) / 
+            NULLIF(SUM(CASE WHEN F.n_anio = 2023 THEN F.E7_Anula + F.E6_Revoca + F.E5_Confirma END), 0) * 100, 0) AS INT) AS VARCHAR) + '%' AS n_anio_2023_Nulidades_Sala,
+        CAST(CAST(ROUND((
+            SUM(CASE WHEN F.n_anio = 2024 THEN F.E7_Anula END) + 0.00001) / 
+            NULLIF(SUM(CASE WHEN F.n_anio = 2024 THEN F.E7_Anula + F.E6_Revoca + F.E5_Confirma END), 0) * 100, 0) AS INT) AS VARCHAR) + '%' AS n_anio_2024_Nulidades_Sala
+    FROM 
+        dbo.Qlik_Dependencia1 AS D
+    JOIN 
+        dbo.Qlik_FEE AS F
+    ON 
+        D.n_dependencia = F.n_dependencia
+    WHERE
+        D.Especialidad = 'Laboral' AND
+        D.Jerarquia = 'Sala Superior' AND
+        F.Proceso = 'NLPT' AND
+        F.Sub_proceso IN ('Abreviado', 'Especial')
+    GROUP BY 
+        D.Corte, 
+        D.Especialidad, 
+        D.Jerarquia, 
+        D.Dependencia,
+        F.Proceso
+),
+Porcentaje_Nulidades_Ordinario_Urgente_Sala AS (
+    SELECT 
+        D.Corte, 
+        D.Especialidad, 
+        D.Jerarquia, 
+        D.Dependencia,
+        F.Proceso, 
+        'Ordinario, Urgente y Especial' AS Sub_proceso,
+        CAST(CAST(ROUND((
+            SUM(CASE WHEN F.n_anio = 2020 THEN F.E7_Anula END) + 0.00001) / 
+            NULLIF(SUM(CASE WHEN F.n_anio = 2020 THEN F.E7_Anula + F.E6_Revoca + F.E5_Confirma END), 0) * 100, 0) AS INT) AS VARCHAR) + '%' AS n_anio_2020_Nulidades_Sala_PCALP,
+        CAST(CAST(ROUND((
+            SUM(CASE WHEN F.n_anio = 2021 THEN F.E7_Anula END) + 0.00001) / 
+            NULLIF(SUM(CASE WHEN F.n_anio = 2021 THEN F.E7_Anula + F.E6_Revoca + F.E5_Confirma END), 0) * 100, 0) AS INT) AS VARCHAR) + '%' AS n_anio_2021_Nulidades_Sala_PCALP,
+        CAST(CAST(ROUND((
+            SUM(CASE WHEN F.n_anio = 2022 THEN F.E7_Anula END) + 0.00001) / 
+            NULLIF(SUM(CASE WHEN F.n_anio = 2022 THEN F.E7_Anula + F.E6_Revoca + F.E5_Confirma END), 0) * 100, 0) AS INT) AS VARCHAR) + '%' AS n_anio_2022_Nulidades_Sala_PCALP,
+        CAST(CAST(ROUND((
+            SUM(CASE WHEN F.n_anio = 2023 THEN F.E7_Anula END) + 0.00001) / 
+            NULLIF(SUM(CASE WHEN F.n_anio = 2023 THEN F.E7_Anula + F.E6_Revoca + F.E5_Confirma END), 0) * 100, 0) AS INT) AS VARCHAR) + '%' AS n_anio_2023_Nulidades_Sala_PCALP,
+        CAST(CAST(ROUND((
+            SUM(CASE WHEN F.n_anio = 2024 THEN F.E7_Anula END) + 0.00001) / 
+            NULLIF(SUM(CASE WHEN F.n_anio = 2024 THEN F.E7_Anula + F.E6_Revoca + F.E5_Confirma END), 0) * 100, 0) AS INT) AS VARCHAR) + '%' AS n_anio_2024_Nulidades_Sala_PCALP
+    FROM 
+        dbo.Qlik_Dependencia1 AS D
+    JOIN 
+        dbo.Qlik_FEE AS F
+    ON 
+        D.n_dependencia = F.n_dependencia
+    WHERE
+        D.Especialidad = 'Laboral' AND
+        D.Jerarquia = 'Sala Superior' AND
+        F.Proceso = 'PCALP' AND
+        F.Sub_proceso IN ('Ordinario', 'Urgente', 'Especial')
+    GROUP BY 
+        D.Corte, 
+        D.Especialidad, 
+        D.Jerarquia, 
+        D.Dependencia,
+        F.Proceso
+),
+CTE_Celeridad_Sala_NLPT AS (
+    SELECT
+        qd.Corte,
+        qd.Especialidad,
+        qd.Jerarquia,
+        qd.Dependencia,
+        qi.Proceso,
+        qi.Sub_proceso,
+        qi.n_anio,
+        ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY qi.tiempo2) OVER (PARTITION BY qi.n_dependencia, qi.n_anio, qi.n_ind), 0) AS Celeridad_Cal_Sala_NLPT
+    FROM
+        dbo.Qlik_Dependencia1 qd
+    JOIN
+        dbo.Qlik_indicadores qi ON qd.n_dependencia = qi.n_dependencia
+    WHERE
+        qi.n_ind = 103
+        AND qd.Especialidad = 'Laboral'
+        AND qd.Jerarquia = 'Sala Superior'
+        AND qi.Proceso = 'NLPT'
+        AND qi.Sub_proceso IN ('Abreviado', 'Ordinario', 'Especial')
+),
+Celeridad_Sala_NLPT_AGG AS (
+    SELECT
+        c.Corte,
+        c.Especialidad,
+        c.Jerarquia,
+        c.Dependencia,
+        c.Proceso,
+        'Abreviado, Ordinario y Especial' AS Sub_proceso,
+        MAX(CASE WHEN c.n_anio = 2020 THEN c.Celeridad_Cal_Sala_NLPT END) AS n_anio_2020_Celeridad_Cal_Sala_NLPT,
+        MAX(CASE WHEN c.n_anio = 2021 THEN c.Celeridad_Cal_Sala_NLPT END) AS n_anio_2021_Celeridad_Cal_Sala_NLPT,
+        MAX(CASE WHEN c.n_anio = 2022 THEN c.Celeridad_Cal_Sala_NLPT END) AS n_anio_2022_Celeridad_Cal_Sala_NLPT,
+        MAX(CASE WHEN c.n_anio = 2023 THEN c.Celeridad_Cal_Sala_NLPT END) AS n_anio_2023_Celeridad_Cal_Sala_NLPT,
+        MAX(CASE WHEN c.n_anio = 2024 THEN c.Celeridad_Cal_Sala_NLPT END) AS n_anio_2024_Celeridad_Cal_Sala_NLPT
+    FROM
+        CTE_Celeridad_Sala_NLPT c
+    GROUP BY
+        c.Corte,
+        c.Especialidad,
+        c.Jerarquia,
+        c.Dependencia,
+        c.Proceso
+),
+CTE_Celeridad_Sala_PCALP AS (
+    SELECT
+        qd.Corte,
+        qd.Especialidad,
+        qd.Jerarquia,
+        qd.Dependencia,
+        qi.Proceso,
+        qi.Sub_proceso,
+        qi.n_anio,
+        ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY qi.tiempo2) OVER (PARTITION BY qi.n_dependencia, qi.n_anio, qi.n_ind), 0) AS Celeridad_Cal_Sala_PCALP
+    FROM
+        dbo.Qlik_Dependencia1 qd
+    JOIN
+        dbo.Qlik_indicadores qi ON qd.n_dependencia = qi.n_dependencia
+    WHERE
+        qi.n_ind = 103
+        AND qd.Especialidad = 'Laboral'
+        AND qd.Jerarquia = 'Sala Superior'
+        AND qi.Proceso = 'PCALP'
+        AND qi.Sub_proceso IN ('Ordinario', 'Urgente')
+),
+Celeridad_Sala_PCALP_AGG AS (
+    SELECT
+        c.Corte,
+        c.Especialidad,
+        c.Jerarquia,
+        c.Dependencia,
+        c.Proceso,
+        'Ordinario y Urgente' AS Sub_proceso,
+        MAX(CASE WHEN c.n_anio = 2020 THEN c.Celeridad_Cal_Sala_PCALP END) AS n_anio_2020_Celeridad_Cal_Sala_PCALP,
+        MAX(CASE WHEN c.n_anio = 2021 THEN c.Celeridad_Cal_Sala_PCALP END) AS n_anio_2021_Celeridad_Cal_Sala_PCALP,
+        MAX(CASE WHEN c.n_anio = 2022 THEN c.Celeridad_Cal_Sala_PCALP END) AS n_anio_2022_Celeridad_Cal_Sala_PCALP,
+        MAX(CASE WHEN c.n_anio = 2023 THEN c.Celeridad_Cal_Sala_PCALP END) AS n_anio_2023_Celeridad_Cal_Sala_PCALP,
+        MAX(CASE WHEN c.n_anio = 2024 THEN c.Celeridad_Cal_Sala_PCALP END) AS n_anio_2024_Celeridad_Cal_Sala_PCALP
+    FROM
+        CTE_Celeridad_Sala_PCALP c
+    GROUP BY
+        c.Corte,
+        c.Especialidad,
+        c.Jerarquia,
+        c.Dependencia,
+        c.Proceso
+)
+SELECT 
+    cr.*, a.[Calificación], a.[Ejecución], a.[Impugnación], a.[Tránsito],
+    CAST([Ranking_General] AS VARCHAR) + '/' + CAST([Pre_Ranking] AS VARCHAR) AS [RankingMeta],
+	CAST(ROUND([Meta_Anual_Proyectada], 0) AS INT) AS [Meta Anual Proyectada Redondeada],
+    CONCAT(CAST(CAST(ROUND([Avance_Meta], 0) AS INT) AS VARCHAR), '%') AS [Avance Meta %],
+    ra.n_anio_2020_ratio, ra.n_anio_2021_ratio, ra.n_anio_2022_ratio, ra.n_anio_2023_ratio, ra.n_anio_2024_ratio,
+    ra.n_anio_2020_concil, ra.n_anio_2021_concil, ra.n_anio_2022_concil, ra.n_anio_2023_concil, ra.n_anio_2024_concil,
+    ra.n_anio_2020_sentencia, ra.n_anio_2021_sentencia, ra.n_anio_2022_sentencia, ra.n_anio_2023_sentencia, ra.n_anio_2024_sentencia,
+    jf.Ratio_2020, jf.Ratio_2021, jf.Ratio_2022, jf.Ratio_2023, jf.Ratio_2024,
+    aud.n_anio_2020_Audiencias, aud.n_anio_2021_Audiencias, aud.n_anio_2022_Audiencias, aud.n_anio_2023_Audiencias, aud.n_anio_2024_Audiencias,
+    cm.n_anio_2020_calificacion, cm.n_anio_2021_calificacion, cm.n_anio_2022_calificacion, cm.n_anio_2023_calificacion, cm.n_anio_2024_calificacion,
+    cm.n_anio_2020_1instancia, cm.n_anio_2021_1instancia, cm.n_anio_2022_1instancia, cm.n_anio_2023_1instancia, cm.n_anio_2024_1instancia,
+    s.n_anio_2020_concil AS Suma_n_anio_2020_concil,
+    s.n_anio_2021_concil AS Suma_n_anio_2021_concil,
+    s.n_anio_2022_concil AS Suma_n_anio_2022_concil,
+    s.n_anio_2023_concil AS Suma_n_anio_2023_concil,
+    s.n_anio_2024_concil AS Suma_n_anio_2024_concil,
+    s.n_anio_2020_sentencia AS Suma_n_anio_2020_sentencia,
+    s.n_anio_2021_sentencia AS Suma_n_anio_2021_sentencia,
+    s.n_anio_2022_sentencia AS Suma_n_anio_2022_sentencia,
+    s.n_anio_2023_sentencia AS Suma_n_anio_2023_sentencia,
+    s.n_anio_2024_sentencia AS Suma_n_anio_2024_sentencia,
+	CAST(CAST(ROUND((s.n_anio_2020_concil + 0.00001) / NULLIF((s.n_anio_2020_concil + s.n_anio_2020_sentencia), 0) * 100, 0) AS INT) AS VARCHAR) + '%' AS Suma_n_anio_2020_ratio,
+    CAST(CAST(ROUND((s.n_anio_2021_concil + 0.00001) / NULLIF((s.n_anio_2021_concil + s.n_anio_2021_sentencia), 0) * 100, 0) AS INT) AS VARCHAR) + '%' AS Suma_n_anio_2021_ratio,
+    CAST(CAST(ROUND((s.n_anio_2022_concil + 0.00001) / NULLIF((s.n_anio_2022_concil + s.n_anio_2022_sentencia), 0) * 100, 0) AS INT) AS VARCHAR) + '%' AS Suma_n_anio_2022_ratio,
+    CAST(CAST(ROUND((s.n_anio_2023_concil + 0.00001) / NULLIF((s.n_anio_2023_concil + s.n_anio_2023_sentencia), 0) * 100, 0) AS INT) AS VARCHAR) + '%' AS Suma_n_anio_2023_ratio,
+    CAST(CAST(ROUND((s.n_anio_2024_concil + 0.00001) / NULLIF((s.n_anio_2024_concil + s.n_anio_2024_sentencia), 0) * 100, 0) AS INT) AS VARCHAR) + '%' AS Suma_n_anio_2024_ratio,
+    ar.n_anio_2020_Audiencias, ar.n_anio_2021_Audiencias, ar.n_anio_2022_Audiencias, ar.n_anio_2023_Audiencias, ar.n_anio_2024_Audiencias,
+    cmT.n_anio_2020_calificacionT, cmT.n_anio_2021_calificacionT, cmT.n_anio_2022_calificacionT, cmT.n_anio_2023_calificacionT, cmT.n_anio_2024_calificacionT,
+    cmT.n_anio_2020_1instanciaT, cmT.n_anio_2021_1instanciaT, cmT.n_anio_2022_1instanciaT, cmT.n_anio_2023_1instanciaT, cmT.n_anio_2024_1instanciaT,
+	c.n_anio_2020_ratio AS ratio_2020_Abreviado_Ordinario,
+    c.n_anio_2021_ratio AS ratio_2021_Abreviado_Ordinario,
+    c.n_anio_2022_ratio AS ratio_2022_Abreviado_Ordinario,
+    c.n_anio_2023_ratio AS ratio_2023_Abreviado_Ordinario,
+    c.n_anio_2024_ratio AS ratio_2024_Abreviado_Ordinario,
+    c.n_anio_2020_concil AS Conciliacion_2020_Abreviado_Ordinario,
+    c.n_anio_2021_concil AS Conciliacion_2021_Abreviado_Ordinario,
+    c.n_anio_2022_concil AS Conciliacion_2022_Abreviado_Ordinario,
+    c.n_anio_2023_concil AS Conciliacion_2023_Abreviado_Ordinario,
+    c.n_anio_2024_concil AS Conciliacion_2024_Abreviado_Ordinario,
+    c.n_anio_2020_sentencia AS Sentencia_2020_Abreviado_Ordinario,
+    c.n_anio_2021_sentencia AS Sentencia_2021_Abreviado_Ordinario,
+    c.n_anio_2022_sentencia AS Sentencia_2022_Abreviado_Ordinario,
+    c.n_anio_2023_sentencia AS Sentencia_2023_Abreviado_Ordinario,
+    c.n_anio_2024_sentencia AS Sentencia_2024_Abreviado_Ordinario,
+    ce.n_anio_2020_ratio AS Especializado_2020_Abreviado_Ordinario,
+    ce.n_anio_2021_ratio AS Especializado_2021_Abreviado_Ordinario,
+    ce.n_anio_2022_ratio AS Especializado_2022_Abreviado_Ordinario,
+    ce.n_anio_2023_ratio AS Especializado_2023_Abreviado_Ordinario,
+    ce.n_anio_2024_ratio AS Especializado_2024_Abreviado_Ordinario,
+    ce.n_anio_2020_concil AS Especializado_2020_Abreviado_Ordinario,
+    ce.n_anio_2021_concil AS Especializado_2021_Abreviado_Ordinario,
+    ce.n_anio_2022_concil AS Especializado_2022_Abreviado_Ordinario,
+    ce.n_anio_2023_concil AS Especializado_2023_Abreviado_Ordinario,
+    ce.n_anio_2024_concil AS Especializado_2024_Abreviado_Ordinario,
+    ce.n_anio_2020_sentencia AS Sentencia_2020_Especializado_Abreviado_Ordinario,
+    ce.n_anio_2021_sentencia AS Sentencia_2021_Especializado_Abreviado_Ordinario,
+    ce.n_anio_2022_sentencia AS Sentencia_2022_Especializado_Abreviado_Ordinario,
+    ce.n_anio_2023_sentencia AS Sentencia_2023_Especializado_Abreviado_Ordinario,
+    ce.n_anio_2024_sentencia AS Sentencia_2024_Especializado_Abreviado_Ordinario,
+    jr.Ratio_2020 AS Juzgamiento_Ratio_2020,
+    jr.Ratio_2021 AS Juzgamiento_Ratio_2021,
+    jr.Ratio_2022 AS Juzgamiento_Ratio_2022,
+    jr.Ratio_2023 AS Juzgamiento_Ratio_2023,
+    jr.Ratio_2024 AS Juzgamiento_Ratio_2024,
+    jaoe.n_anio_2020_Juzgamiento AS Juzgamiento_Anticipado_2020,
+    jaoe.n_anio_2021_Juzgamiento AS Juzgamiento_Anticipado_2021,
+    jaoe.n_anio_2022_Juzgamiento AS Juzgamiento_Anticipado_2022,
+    jaoe.n_anio_2023_Juzgamiento AS Juzgamiento_Anticipado_2023,
+    jaoe.n_anio_2024_Juzgamiento AS Juzgamiento_Anticipado_2024,
+    jp.Ratio_2020 AS Juzgamiento_Porcentaje_2020,
+    jp.Ratio_2021 AS Juzgamiento_Porcentaje_2021,
+    jp.Ratio_2022 AS Juzgamiento_Porcentaje_2022,
+    jp.Ratio_2023 AS Juzgamiento_Porcentaje_2023,
+    jp.Ratio_2024 AS Juzgamiento_Porcentaje_2024,
+    jaot.n_anio_2020_Juzgamiento AS Juzgamiento_Total_2020,
+    jaot.n_anio_2021_Juzgamiento AS Juzgamiento_Total_2021,
+    jaot.n_anio_2022_Juzgamiento AS Juzgamiento_Total_2022,
+    jaot.n_anio_2023_Juzgamiento AS Juzgamiento_Total_2023,
+    jaot.n_anio_2024_Juzgamiento AS Juzgamiento_Total_2024,
+    arnlpt.n_anio_2020_Audiencias AS Audiencias_2020_Abreviado_Ordinario_NLPT,
+    arnlpt.n_anio_2021_Audiencias AS Audiencias_2021_Abreviado_Ordinario_NLPT,
+    arnlpt.n_anio_2022_Audiencias AS Audiencias_2022_Abreviado_Ordinario_NLPT,
+    arnlpt.n_anio_2023_Audiencias AS Audiencias_2023_Abreviado_Ordinario_NLPT,
+    arnlpt.n_anio_2024_Audiencias AS Audiencias_2024_Abreviado_Ordinario_NLPT,
+    artotal.n_anio_2020_Audiencias AS Audiencias_2020_Abreviado_Ordinario_Total_NLPT,
+    artotal.n_anio_2021_Audiencias AS Audiencias_2021_Abreviado_Ordinario_Total_NLPT,
+    artotal.n_anio_2022_Audiencias AS Audiencias_2022_Abreviado_Ordinario_Total_NLPT,
+    artotal.n_anio_2023_Audiencias AS Audiencias_2023_Abreviado_Ordinario_Total_NLPT,
+    artotal.n_anio_2024_Audiencias AS Audiencias_2024_Abreviado_Ordinario_Total_NLPT,
+    pna.n_anio_2020_Nulidades AS Porcentaje_Nulidades_2020,
+    pna.n_anio_2021_Nulidades AS Porcentaje_Nulidades_2021,
+    pna.n_anio_2022_Nulidades AS Porcentaje_Nulidades_2022,
+    pna.n_anio_2023_Nulidades AS Porcentaje_Nulidades_2023,
+    pna.n_anio_2024_Nulidades AS Porcentaje_Nulidades_2024,
+    pna.n_anio_2020_2instancia AS Nulidades_2020_2instancia,
+    pna.n_anio_2021_2instancia AS Nulidades_2021_2instancia,
+    pna.n_anio_2022_2instancia AS Nulidades_2022_2instancia,
+    pna.n_anio_2023_2instancia AS Nulidades_2023_2instancia,
+    pna.n_anio_2024_2instancia AS Nulidades_2024_2instancia,
+    pnat.n_anio_2020_Nulidades AS Porcentaje_Nulidades_Total_2020,
+    pnat.n_anio_2021_Nulidades AS Porcentaje_Nulidades_Total_2021,
+    pnat.n_anio_2022_Nulidades AS Porcentaje_Nulidades_Total_2022,
+    pnat.n_anio_2023_Nulidades AS Porcentaje_Nulidades_Total_2023,
+    pnat.n_anio_2024_Nulidades AS Porcentaje_Nulidades_Total_2024,
+    pnat.n_anio_2020_2instancia AS Nulidades_Total_2020_2instancia,
+    pnat.n_anio_2021_2instancia AS Nulidades_Total_2021_2instancia,
+    pnat.n_anio_2022_2instancia AS Nulidades_Total_2022_2instancia,
+    pnat.n_anio_2023_2instancia AS Nulidades_Total_2023_2instancia,
+    pnat.n_anio_2024_2instancia AS Nulidades_Total_2024_2instancia,
+    cc.n_anio_2020_Celeridad_Cal, cc.n_anio_2021_Celeridad_Cal, cc.n_anio_2022_Celeridad_Cal, cc.n_anio_2023_Celeridad_Cal, cc.n_anio_2024_Celeridad_Cal,
+    cc.n_anio_2020_Celeridad_1inst, cc.n_anio_2021_Celeridad_1inst, cc.n_anio_2022_Celeridad_1inst, cc.n_anio_2023_Celeridad_1inst, cc.n_anio_2024_Celeridad_1inst,
+    cc.n_anio_2020_Celeridad_2inst, cc.n_anio_2021_Celeridad_2inst, cc.n_anio_2022_Celeridad_2inst, cc.n_anio_2023_Celeridad_2inst, cc.n_anio_2024_Celeridad_2inst,
+    ct.n_anio_2020_Celeridad_Cal AS Total_Celeridad_2020,
+    ct.n_anio_2021_Celeridad_Cal AS Total_Celeridad_2021,
+    ct.n_anio_2022_Celeridad_Cal AS Total_Celeridad_2022,
+    ct.n_anio_2023_Celeridad_Cal AS Total_Celeridad_2023,
+    ct.n_anio_2024_Celeridad_Cal AS Total_Celeridad_2024,
+    ct.n_anio_2020_Celeridad_1inst AS Total_Celeridad_1inst_2020,
+    ct.n_anio_2021_Celeridad_1inst AS Total_Celeridad_1inst_2021,
+    ct.n_anio_2022_Celeridad_1inst AS Total_Celeridad_1inst_2022,
+    ct.n_anio_2023_Celeridad_1inst AS Total_Celeridad_1inst_2023,
+    ct.n_anio_2024_Celeridad_1inst AS Total_Celeridad_1inst_2024,
+    ct.n_anio_2020_Celeridad_2inst AS Total_Celeridad_2inst_2020,
+    ct.n_anio_2021_Celeridad_2inst AS Total_Celeridad_2inst_2021,
+    ct.n_anio_2022_Celeridad_2inst AS Total_Celeridad_2inst_2022,
+    ct.n_anio_2023_Celeridad_2inst AS Total_Celeridad_2inst_2023,
+    ct.n_anio_2024_Celeridad_2inst AS Total_Celeridad_2inst_2024,
+    cfc.n_anio_2020_Celeridad_Cal AS n_anio_2020_Celeridad_Cal_FULL,
+    cfc.n_anio_2021_Celeridad_Cal AS n_anio_2021_Celeridad_Cal_FULL,
+    cfc.n_anio_2022_Celeridad_Cal AS n_anio_2022_Celeridad_Cal_FULL,
+    cfc.n_anio_2023_Celeridad_Cal AS n_anio_2023_Celeridad_Cal_FULL,
+    cfc.n_anio_2024_Celeridad_Cal AS n_anio_2024_Celeridad_Cal_FULL,
+    cfc.n_anio_2020_Celeridad_1inst AS n_anio_2020_Celeridad_1inst_FULL,
+    cfc.n_anio_2021_Celeridad_1inst AS n_anio_2021_Celeridad_1inst_FULL,
+    cfc.n_anio_2022_Celeridad_1inst AS n_anio_2022_Celeridad_1inst_FULL,
+    cfc.n_anio_2023_Celeridad_1inst AS n_anio_2023_Celeridad_1inst_FULL,
+    cfc.n_anio_2024_Celeridad_1inst AS n_anio_2024_Celeridad_1inst_FULL,
+    cmTFULL.n_anio_2020_Celeridad_Cal_Total AS PCALP_FULL_n_anio_2020_Celeridad_Cal_Total,
+    cmTFULL.n_anio_2021_Celeridad_Cal_Total AS PCALP_FULL_n_anio_2021_Celeridad_Cal_Total,
+    cmTFULL.n_anio_2022_Celeridad_Cal_Total AS PCALP_FULL_n_anio_2022_Celeridad_Cal_Total,
+    cmTFULL.n_anio_2023_Celeridad_Cal_Total AS PCALP_FULL_n_anio_2023_Celeridad_Cal_Total,
+    cmTFULL.n_anio_2024_Celeridad_Cal_Total AS PCALP_FULL_n_anio_2024_Celeridad_Cal_Total,
+    cmTFULL.n_anio_2020_Celeridad_1inst_Total AS PCALP_FULL_n_anio_2020_Celeridad_1inst_Total,
+    cmTFULL.n_anio_2021_Celeridad_1inst_Total AS PCALP_FULL_n_anio_2021_Celeridad_1inst_Total,
+    cmTFULL.n_anio_2022_Celeridad_1inst_Total AS PCALP_FULL_n_anio_2022_Celeridad_1inst_Total,
+    cmTFULL.n_anio_2023_Celeridad_1inst_Total AS PCALP_FULL_n_anio_2023_Celeridad_1inst_Total,
+    cmTFULL.n_anio_2024_Celeridad_1inst_Total AS PCALP_FULL_n_anio_2024_Celeridad_1inst_Total,
+    pnes.n_anio_2020_Nulidades_Sala AS Porcentaje_Nulidades_Sala_2020,
+    pnes.n_anio_2021_Nulidades_Sala AS Porcentaje_Nulidades_Sala_2021,
+    pnes.n_anio_2022_Nulidades_Sala AS Porcentaje_Nulidades_Sala_2022,
+    pnes.n_anio_2023_Nulidades_Sala AS Porcentaje_Nulidades_Sala_2023,
+    pnes.n_anio_2024_Nulidades_Sala AS Porcentaje_Nulidades_Sala_2024,
+    pnesO.n_anio_2020_Nulidades_Sala_PCALP AS Porcentaje_Nulidades_Sala_PCALP_2020,
+    pnesO.n_anio_2021_Nulidades_Sala_PCALP AS Porcentaje_Nulidades_Sala_PCALP_2021,
+    pnesO.n_anio_2022_Nulidades_Sala_PCALP AS Porcentaje_Nulidades_Sala_PCALP_2022,
+    pnesO.n_anio_2023_Nulidades_Sala_PCALP AS Porcentaje_Nulidades_Sala_PCALP_2023,
+    pnesO.n_anio_2024_Nulidades_Sala_PCALP AS Porcentaje_Nulidades_Sala_PCALP_2024,
+    csn.n_anio_2020_Celeridad_Cal_Sala_NLPT AS n_anio_2020_Celeridad_Cal_Sala_NLPT,
+    csn.n_anio_2021_Celeridad_Cal_Sala_NLPT AS n_anio_2021_Celeridad_Cal_Sala_NLPT,
+    csn.n_anio_2022_Celeridad_Cal_Sala_NLPT AS n_anio_2022_Celeridad_Cal_Sala_NLPT,
+    csn.n_anio_2023_Celeridad_Cal_Sala_NLPT AS n_anio_2023_Celeridad_Cal_Sala_NLPT,
+    csn.n_anio_2024_Celeridad_Cal_Sala_NLPT AS n_anio_2024_Celeridad_Cal_Sala_NLPT,
+    csp.n_anio_2020_Celeridad_Cal_Sala_PCALP AS n_anio_2020_Celeridad_Cal_Sala_PCALP,
+    csp.n_anio_2021_Celeridad_Cal_Sala_PCALP AS n_anio_2021_Celeridad_Cal_Sala_PCALP,
+    csp.n_anio_2022_Celeridad_Cal_Sala_PCALP AS n_anio_2022_Celeridad_Cal_Sala_PCALP,
+    csp.n_anio_2023_Celeridad_Cal_Sala_PCALP AS n_anio_2023_Celeridad_Cal_Sala_PCALP,
+    csp.n_anio_2024_Celeridad_Cal_Sala_PCALP AS n_anio_2024_Celeridad_Cal_Sala_PCALP
+FROM 
+    CTE_Ranking AS cr
+LEFT JOIN CTE_Adicional AS a ON cr.n_dependencia = a.n_dependencia
+LEFT JOIN CTE_ResultadosAnuales AS ra ON cr.n_dependencia = ra.n_dependencia
+LEFT JOIN JuzgamientoFinal AS jf ON cr.Corte = jf.Corte AND cr.Dependencia = jf.Dependencia
+LEFT JOIN CTE_Audiencias AS aud ON cr.n_dependencia = aud.n_dependencia
+LEFT JOIN CTE_Medianas AS cm ON cr.Corte = cm.Corte AND cr.Jerarquia = cm.Jerarquia
+LEFT JOIN Sumas AS s ON cr.Corte = s.Corte AND cr.Jerarquia = s.Jerarquia
+LEFT JOIN CTE_Audiencias_Reprogramadas_Totales AS ar ON cr.Corte = ar.Corte AND cr.Jerarquia = ar.Jerarquia
+LEFT JOIN CTE_MedianasT AS cmT ON cr.n_dependencia = cmT.n_dependencia
+LEFT JOIN CTE_Conciliacion_Abreviado_Ordinario AS c ON cr.Corte = c.Corte AND cr.Jerarquia = c.Jerarquia AND cr.Dependencia = c.Dependencia
+LEFT JOIN CTE_Conciliacion_Especializado_Abreviado_Ordinario AS ce ON cr.Corte = ce.Corte AND cr.Jerarquia = ce.Jerarquia
+LEFT JOIN JuzgamientoFinal AS jr ON cr.Corte = jr.Corte AND cr.Dependencia = jr.Dependencia
+LEFT JOIN Juzgamiento_Anticipado_Ordinario_Entero AS jaoe ON cr.Corte = jaoe.Corte AND cr.Dependencia = jaoe.Dependencia AND cr.Jerarquia = jaoe.Jerarquia
+LEFT JOIN Juzgamiento_Porcentaje_Total_Calculado AS jp ON cr.Corte = jp.Corte AND cr.Jerarquia = jp.Jerarquia
+LEFT JOIN Juzgamiento_Anticipado_Ordinario_Total_Entero AS jaot ON cr.Corte = jaot.Corte AND cr.Jerarquia = jaot.Jerarquia
+LEFT JOIN Audiencias_Reprogramadas_Abreviado_Ordinario_NLPT AS arnlpt ON cr.Corte = arnlpt.Corte AND cr.Dependencia = arnlpt.Dependencia AND cr.Jerarquia = arnlpt.Jerarquia AND cr.n_dependencia = arnlpt.n_dependencia 
+LEFT JOIN Audiencias_Reprogramadas_Abreviado_Ordinario_Total_NLPT AS artotal ON cr.Corte = artotal.Corte AND cr.Jerarquia = artotal.Jerarquia AND cr.n_dependencia = artotal.n_dependencia
+LEFT JOIN Porcentaje_Nulidades_Abreviado_NLPT AS pna ON cr.Corte = pna.Corte AND cr.Jerarquia = pna.Jerarquia AND cr.Dependencia = pna.Dependencia
+LEFT JOIN Porcentaje_Nulidades_Abreviado_Total_NLPT AS pnat ON cr.Corte = pnat.Corte AND cr.Jerarquia = pnat.Jerarquia
+LEFT JOIN Celeridad_Calificacion AS cc ON cr.Corte = cc.Corte AND cr.Dependencia = cc.Dependencia AND cr.Jerarquia = cc.Jerarquia
+LEFT JOIN (
+    SELECT 
+        n_dependencia,
+        Corte,
+        Dependencia,
+        Especialidad,
+        Jerarquia,
+        Proceso,
+        'Abreviado y Ordinario' AS Sub_proceso,
+        MAX(CASE WHEN n_anio = 2020 AND n_ind = 101 THEN Celeridad_Cal END) AS n_anio_2020_Celeridad_Cal,
+        MAX(CASE WHEN n_anio = 2021 AND n_ind = 101 THEN Celeridad_Cal END) AS n_anio_2021_Celeridad_Cal,
+        MAX(CASE WHEN n_anio = 2022 AND n_ind = 101 THEN Celeridad_Cal END) AS n_anio_2022_Celeridad_Cal,
+        MAX(CASE WHEN n_anio = 2023 AND n_ind = 101 THEN Celeridad_Cal END) AS n_anio_2023_Celeridad_Cal,
+        MAX(CASE WHEN n_anio = 2024 AND n_ind = 101 THEN Celeridad_Cal END) AS n_anio_2024_Celeridad_Cal,
+        MAX(CASE WHEN n_anio = 2020 AND n_ind = 102 THEN Celeridad_Cal END) AS n_anio_2020_Celeridad_1inst,
+        MAX(CASE WHEN n_anio = 2021 AND n_ind = 102 THEN Celeridad_Cal END) AS n_anio_2021_Celeridad_1inst,
+        MAX(CASE WHEN n_anio = 2022 AND n_ind = 102 THEN Celeridad_Cal END) AS n_anio_2022_Celeridad_1inst,
+        MAX(CASE WHEN n_anio = 2023 AND n_ind = 102 THEN Celeridad_Cal END) AS n_anio_2023_Celeridad_1inst,
+        MAX(CASE WHEN n_anio = 2024 AND n_ind = 102 THEN Celeridad_Cal END) AS n_anio_2024_Celeridad_1inst,
+        MAX(CASE WHEN n_anio = 2020 AND n_ind = 103 THEN Celeridad_Cal END) AS n_anio_2020_Celeridad_2inst,
+        MAX(CASE WHEN n_anio = 2021 AND n_ind = 103 THEN Celeridad_Cal END) AS n_anio_2021_Celeridad_2inst,
+        MAX(CASE WHEN n_anio = 2022 AND n_ind = 103 THEN Celeridad_Cal END) AS n_anio_2022_Celeridad_2inst,
+        MAX(CASE WHEN n_anio = 2023 AND n_ind = 103 THEN Celeridad_Cal END) AS n_anio_2023_Celeridad_2inst,
+        MAX(CASE WHEN n_anio = 2024 AND n_ind = 103 THEN Celeridad_Cal END) AS n_anio_2024_Celeridad_2inst
+    FROM
+        CTE_Celeridad_Mediana_TOTAL
+    GROUP BY
+        n_dependencia,
+        Corte,
+        Dependencia,
+        Especialidad,
+        Jerarquia,
+        Proceso
+) AS ct ON cr.n_dependencia = ct.n_dependencia AND cr.Corte = ct.Corte AND cr.Dependencia = ct.Dependencia AND cr.Jerarquia = ct.Jerarquia
+LEFT JOIN Celeridad_Full_Calificacion AS cfc ON cr.Corte = cfc.Corte AND cr.Dependencia = cfc.Dependencia AND cr.Jerarquia = cfc.Jerarquia
+LEFT JOIN Celeridad_Mediana_TOTAL_FULL_AGG AS cmTFULL ON cr.Corte = cmTFULL.Corte AND cr.Jerarquia = cmTFULL.Jerarquia
+LEFT JOIN Porcentaje_Nulidades_Abreviado_Especial_Sala AS pnes ON cr.Corte = pnes.Corte AND cr.Dependencia = pnes.Dependencia AND cr.Jerarquia = pnes.Jerarquia
+LEFT JOIN Porcentaje_Nulidades_Ordinario_Urgente_Sala AS pnesO ON cr.Corte = pnesO.Corte AND cr.Dependencia = pnesO.Dependencia AND cr.Jerarquia = pnesO.Jerarquia
+LEFT JOIN Celeridad_Sala_NLPT_AGG AS csn ON cr.Corte = csn.Corte AND cr.Dependencia = csn.Dependencia AND cr.Jerarquia = csn.Jerarquia
+LEFT JOIN Celeridad_Sala_PCALP_AGG AS csp ON cr.Corte = csp.Corte AND cr.Dependencia = csp.Dependencia AND cr.Jerarquia = csp.Jerarquia
+WHERE 
+    cr.n_dependencia NOT IN (7114, 7126)
+ORDER BY 
+    cr.n_dependencia;
